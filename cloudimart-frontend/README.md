@@ -1,3 +1,45 @@
+# Cloudimart Frontend — local dev notes
+
+This folder contains the Next.js frontend for Cloudimart. Below are minimal steps to run it locally and the recommended way to configure the API URL.
+
+Environment variable (recommended)
+-------------------------------
+- This project uses an environment variable named `NEXT_PUBLIC_API_URL` to point the frontend to your backend API (for example Laravel).
+- Advantages: explicit, portable to deployments (Vercel / Netlify), and keeps code the same between environments.
+
+How to use
+----------
+1. Copy the example env file and edit the URL to match your backend:
+
+```bash
+copy .env.example .env.local
+# then edit .env.local and set NEXT_PUBLIC_API_URL
+```
+
+2. Install dependencies and run the dev server:
+
+```powershell
+cd cloudimart-frontend
+npm install
+npm run dev
+# or use pnpm/yarn if you prefer
+```
+
+3. Open `http://localhost:3000` and navigate to Register / Login.
+
+CORS note
+---------
+- If the backend runs on a different origin (for example `http://localhost:8000`), ensure your Laravel app allows requests from the Next origin (`http://localhost:3000`).
+- Configure CORS in Laravel (e.g., `config/cors.php`) or by using the `fruitcake/laravel-cors` middleware.
+
+Alternative: Next.js proxy
+-------------------------
+- You can use Next.js rewrites to proxy `/api/*` to your backend. This avoids CORS in development, but requires adding a `next.config.js` rewrite and careful deployment configuration. The env var approach is simpler and recommended.
+
+Troubleshooting
+---------------
+- If requests return 401/403, confirm CSRF, CORS and auth flows on the backend.
+- If you still see CORS issues, either add the frontend origin to the backend allowed origins or consider the rewrite/proxy approach.
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
