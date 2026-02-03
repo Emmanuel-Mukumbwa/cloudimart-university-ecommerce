@@ -36,7 +36,7 @@ export default function LoginPage() {
           placeholder="Email"
           type="email"
           className="w-full p-2 border rounded mb-2"
-        />
+        /> 
 
         <input
           value={password}

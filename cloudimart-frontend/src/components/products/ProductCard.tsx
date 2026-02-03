@@ -1,3 +1,4 @@
+// File: cloudimart-frontend/src/components/products/ProductCard.tsx
 import React from 'react';
 
 export default function ProductCard({ product }: { product: any }) {
@@ -12,4 +13,4 @@ export default function ProductCard({ product }: { product: any }) {
       </div>
     </article>
   );
-}
+} 

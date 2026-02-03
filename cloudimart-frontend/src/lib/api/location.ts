@@ -5,3 +5,4 @@ export async function fetchLocations() {
   const res = await client.get('/api/locations');
   return res.data;
 }
+ 
