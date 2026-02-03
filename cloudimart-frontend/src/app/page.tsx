@@ -10,12 +10,20 @@ export default function Home() {
           <p className="mb-6 text-gray-600">A small storefront demo. Use the buttons below to register or login and try the app.</p>
 
           <div className="flex gap-4 justify-center">
-            <Link href="/register">
-              <a className="inline-block px-6 py-2 rounded bg-blue-600 text-white">Register</a>
-            </Link>
-            <Link href="/login">
-              <a className="inline-block px-6 py-2 rounded border border-gray-300">Login</a>
-            </Link>
+            <Link
+  href="/register"
+  className="inline-block px-6 py-2 rounded bg-blue-600 text-white"
+>
+  Register
+</Link>
+
+<Link
+  href="/login"
+  className="inline-block px-6 py-2 rounded border border-gray-300"
+>
+  Login
+</Link>
+
           </div>
         </section>
       </main>
