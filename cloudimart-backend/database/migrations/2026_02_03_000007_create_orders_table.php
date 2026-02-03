@@ -1,0 +1,25 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    public function up(): void
+    {
+        Schema::create('orders', function (Blueprint $table) {
+            $table->id();
+            $table->string('order_id')->unique(); // Unique ID: ORD-YYYYMMDD-XXXX
+            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+            $table->decimal('total', 10, 2);
+            $table->string('delivery_address');
+            $table->enum('status', ['pending', 'completed', 'delivered'])->default('pending');
+            $table->timestamps();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('orders');
+    }
+};
