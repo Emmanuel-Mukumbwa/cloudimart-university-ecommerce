@@ -1,6 +1,5 @@
 // File: cloudimart-frontend/src/app/%28auth%29/login/page.tsx
 'use client';
-
 import { useState } from 'react';
 import axios from 'axios';
 
@@ -15,10 +14,7 @@ export default function LoginPage() {
     try {
       const url = API ? `${API}/api/auth/login` : '/api/auth/login';
       const res = await axios.post(url, { email, password });
-
-      // Save token in localStorage for future API calls
       localStorage.setItem('auth_token', res.data.access_token);
-
       alert(`Logged in successfully! Welcome ${res.data.user.name}`);
     } catch (err: any) {
       alert(err.response?.data?.message || 'Login failed');
@@ -26,30 +22,41 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6">
-      <form onSubmit={onSubmit} className="w-full max-w-md bg-white p-6 rounded shadow">
-        <h2 className="text-xl font-semibold mb-4">Login</h2>
+    <div className="container py-5">
+      <div className="row justify-content-center">
+        <div className="col-md-5">
+          <div className="card shadow-sm border-0">
+            <div className="card-body">
+              <h3 className="mb-4 text-center">Login</h3>
+              <form onSubmit={onSubmit}>
+                <div className="mb-3">
+                  <input
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="Email"
+                    type="email"
+                    className="form-control"
+                  />
+                </div>
 
-        <input
-          value={email}
-          onChange={e => setEmail(e.target.value)}
-          placeholder="Email"
-          type="email"
-          className="w-full p-2 border rounded mb-2"
-        /> 
+                <div className="mb-4">
+                  <input
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Password"
+                    type="password"
+                    className="form-control"
+                  />
+                </div>
 
-        <input
-          value={password}
-          onChange={e => setPassword(e.target.value)}
-          placeholder="Password"
-          type="password"
-          className="w-full p-2 border rounded mb-4"
-        />
-
-        <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded">
-          Login
-        </button>
-      </form>
+                <button type="submit" className="btn btn-primary w-100">
+                  Login
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

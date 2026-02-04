@@ -1,3 +1,4 @@
+//src/app/(store)/products/page.tsx
 'use client';
 import React, { useEffect, useState } from 'react';
 import { useProducts } from '../../../lib/hooks/useProducts';
@@ -20,59 +21,59 @@ export default function ProductsPage() {
         if (!mounted) return;
         setCategories(res.data.data ?? res.data.categories ?? res.data);
       })
-      .catch(() => {
-        // fallback: leave categories empty
-      });
+      .catch(() => {});
     return () => { mounted = false; };
   }, []);
 
-  // When category changes reset page
   useEffect(() => setPage(1), [category, q]);
 
-  if (isLoading) return <div className="p-6">Loading products...</div>;
-  if (isError) return <div className="p-6 text-red-600">Failed loading products</div>;
+  if (isLoading) return <div className="container py-5 text-center">Loading products...</div>;
+  if (isError) return <div className="container py-5 text-danger text-center">Failed loading products</div>;
 
   const products = data?.data ?? [];
 
   return (
-    <div className="p-6">
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <CategoryFilter categories={categories} value={category} onChange={setCategory} />
+    <div className="container py-5">
+      <div className="bg-white rounded shadow-sm p-4 mb-4">
+        <div className="row g-3 align-items-center mb-3">
+          <div className="col-md-4">
+            <CategoryFilter categories={categories} value={category} onChange={setCategory} />
+          </div>
+          <div className="col-md-4 ms-auto">
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search products..."
+              className="form-control"
+            />
+          </div>
         </div>
 
-        <div className="w-full sm:w-1/3">
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search products..."
-            className="w-full px-3 py-2 border rounded"
-          />
+        <div className="products-grid">
+          {products.map((p: any) => <ProductCard key={p.id} product={p} />)}
         </div>
-      </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        {products.map((p: any) => <ProductCard key={p.id} product={p} />)}
-      </div>
+        <div className="d-flex justify-content-between align-items-center mt-4">
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={data?.meta?.current_page === 1}
+            className="btn btn-outline-secondary btn-sm"
+          >
+            Previous
+          </button>
 
-      <div className="mt-6 flex items-center justify-between">
-        <button
-          onClick={() => setPage((p) => Math.max(1, p - 1))}
-          disabled={data?.meta?.current_page === 1}
-          className="px-3 py-2 border rounded disabled:opacity-50"
-        >
-          Previous
-        </button>
+          <div className="small text-muted">
+            Page {data?.meta?.current_page ?? 1} of {data?.meta?.last_page ?? 1}
+          </div>
 
-        <div>Page {data?.meta?.current_page ?? 1} / {data?.meta?.last_page ?? 1}</div>
-
-        <button
-          onClick={() => setPage((p) => p + 1)}
-          disabled={data?.meta?.current_page === data?.meta?.last_page}
-          className="px-3 py-2 border rounded disabled:opacity-50"
-        >
-          Next
-        </button>
+          <button
+            onClick={() => setPage((p) => p + 1)}
+            disabled={data?.meta?.current_page === data?.meta?.last_page}
+            className="btn btn-outline-secondary btn-sm"
+          >
+            Next
+          </button>
+        </div>
       </div>
     </div>
   );

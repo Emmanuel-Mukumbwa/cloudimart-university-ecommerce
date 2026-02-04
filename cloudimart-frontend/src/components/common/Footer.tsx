@@ -1,11 +1,10 @@
 // File: cloudimart-frontend/src/components/common/Footer.tsx
 export default function Footer() {
   return (
-    <footer className="w-full bg-white border-t mt-8">
-      <div className="container py-4 text-center text-sm text-gray-600">
-        © {new Date().getFullYear()} Cloudimart
+    <footer className="site-footer mt-auto">
+      <div className="container text-center small">
+        © {new Date().getFullYear()} Cloudimart — Mzuzu University Community Store
       </div>
     </footer>
   );
 }
- 

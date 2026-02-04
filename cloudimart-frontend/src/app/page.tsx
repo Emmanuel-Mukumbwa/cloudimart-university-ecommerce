@@ -5,11 +5,9 @@ import FeaturedProducts from '../components/common/FeaturedProducts';
 
 export default function Home() {
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-black">
-      <main className="w-full">
-        <Hero />
-        <FeaturedProducts />
-      </main>
-    </div>
+    <main className="bg-light">
+      <Hero />
+      <FeaturedProducts />
+    </main>
   );
 }

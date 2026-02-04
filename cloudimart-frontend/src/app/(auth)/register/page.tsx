@@ -1,6 +1,5 @@
 //src/app/(auth)/register/page.tsx
 'use client';
-
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { useForm } from 'react-hook-form';
@@ -30,9 +29,7 @@ export default function RegisterPage() {
     const url = API ? `${API}/api/locations` : '/api/locations';
     axios.get(url)
       .then(res => setLocations(res.data.locations || []))
-      .catch(err => {
-        console.error('Failed to load locations:', err);
-      });
+      .catch(console.error);
   }, [API]);
 
   const onSubmit = async (data: RegisterFormData) => {
@@ -46,37 +43,55 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6">
-      <form onSubmit={handleSubmit(onSubmit)} className="w-full max-w-md bg-white p-6 rounded shadow">
-        <h2 className="text-xl font-semibold mb-4">Register</h2>
+    <div className="container py-5">
+      <div className="row justify-content-center">
+        <div className="col-md-6 col-lg-5">
+          <div className="card shadow-sm border-0">
+            <div className="card-body">
+              <h3 className="mb-4 text-center">Create an Account</h3>
+              <form onSubmit={handleSubmit(onSubmit)}>
+                <div className="mb-3">
+                  <input {...register('name')} placeholder="Full Name" className="form-control" />
+                  {errors.name && <small className="text-danger">{errors.name.message}</small>}
+                </div>
 
-        <input {...register('name')} placeholder="Full Name" className="w-full p-2 border rounded mb-2" />
-        {errors.name && <p className="text-red-600 text-sm">{errors.name.message}</p>}
+                <div className="mb-3">
+                  <input {...register('email')} placeholder="Email" type="email" className="form-control" />
+                  {errors.email && <small className="text-danger">{errors.email.message}</small>}
+                </div>
 
-        <input {...register('email')} placeholder="Email" type="email" className="w-full p-2 border rounded mb-2" />
-        {errors.email && <p className="text-red-600 text-sm">{errors.email.message}</p>}
+                <div className="mb-3">
+                  <input {...register('password')} placeholder="Password" type="password" className="form-control" />
+                  {errors.password && <small className="text-danger">{errors.password.message}</small>}
+                </div>
 
-        <input {...register('password')} placeholder="Password" type="password" className="w-full p-2 border rounded mb-2" />
-        {errors.password && <p className="text-red-600 text-sm">{errors.password.message}</p>}
+                <div className="mb-3">
+                  <input {...register('password_confirmation')} placeholder="Confirm Password" type="password" className="form-control" />
+                  {errors.password_confirmation && <small className="text-danger">{errors.password_confirmation.message}</small>}
+                </div>
 
-        <input {...register('password_confirmation')} placeholder="Confirm Password" type="password" className="w-full p-2 border rounded mb-2" />
-        {errors.password_confirmation && <p className="text-red-600 text-sm">{errors.password_confirmation.message}</p>}
+                <div className="mb-3">
+                  <input {...register('phone_number')} placeholder="Phone Number" className="form-control" />
+                </div>
 
-        <input {...register('phone_number')} placeholder="Phone Number" className="w-full p-2 border rounded mb-2" />
-        {errors.phone_number && <p className="text-red-600 text-sm">{errors.phone_number.message}</p>}
+                <div className="mb-4">
+                  <select {...register('location_id')} className="form-select">
+                    <option value="">Select your location</option>
+                    {locations.map(loc => (
+                      <option key={loc.id} value={loc.id}>{loc.name}</option>
+                    ))}
+                  </select>
+                  {errors.location_id && <small className="text-danger">{errors.location_id.message}</small>}
+                </div>
 
-        <select {...register('location_id')} className="w-full p-2 border rounded mb-3">
-          <option value="">Select your location</option>
-          {locations.map(loc => (
-            <option key={loc.id} value={loc.id}>{loc.name}</option>
-          ))}
-        </select>
-        {errors.location_id && <p className="text-red-600 text-sm">{errors.location_id.message}</p>}
-
-        <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded">
-          Register
-        </button> 
-      </form>
+                <button type="submit" className="btn btn-primary w-100">
+                  Register
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
