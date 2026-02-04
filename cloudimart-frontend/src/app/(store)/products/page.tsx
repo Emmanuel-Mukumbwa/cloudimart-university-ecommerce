@@ -14,7 +14,7 @@ export default function ProductsPage() {
 
   const { data, isLoading, isError } = useProducts({ page, per_page: 12, q, category });
 
-  useEffect(() => {
+  useEffect(() => { 
     let mounted = true;
     client.get('/api/categories')
       .then((res) => {

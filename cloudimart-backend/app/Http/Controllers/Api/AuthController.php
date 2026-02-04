@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use App\Services\LocationService;
 
 class AuthController extends Controller
 {
@@ -18,32 +19,59 @@ class AuthController extends Controller
     public function register(Request $request)
     {
         $request->validate([
-            'name'              => 'required|string|max:255',
-            'email'             => 'required|string|email|max:255|unique:users',
-            'password'          => 'required|string|min:6|confirmed',
-            'phone_number'      => 'nullable|string|max:20',
-            'location_id'       => 'required|exists:locations,id',
+            'name'         => 'required|string|max:255',
+            'email'        => 'required|string|email|max:255|unique:users',
+            'password'     => 'required|string|min:6|confirmed',
+            'phone_number' => 'nullable|string|max:20',
+            'location_id'  => 'required|exists:locations,id',
+            'latitude'     => 'nullable|numeric',
+            'longitude'    => 'nullable|numeric',
         ]);
 
         try {
-            $user = DB::transaction(function () use ($request) {
+            // Determine if the user's provided coordinates are within a valid delivery zone
+            $location_verified = false;
+
+            if (
+                $request->filled('latitude') &&
+                $request->filled('longitude') &&
+                $request->filled('location_id')
+            ) {
+                $locationService = app(LocationService::class);
+
+                // Check if user coordinates are inside any allowed polygon
+                $matches = $locationService->isWithinDeliveryZone(
+                    (float) $request->latitude,
+                    (float) $request->longitude
+                );
+
+                // You can optionally refine this to verify against the selected location polygon only
+                $location_verified = $matches;
+            }
+
+            // Use transaction to ensure data integrity
+            $user = DB::transaction(function () use ($request, $location_verified) {
                 return User::create([
-                    'name'         => $request->name,
-                    'email'        => $request->email,
-                    'password'     => Hash::make($request->password), // hash once here
-                    'phone_number' => $request->phone_number,
-                    'location_id'  => $request->location_id,
+                    'name'                 => $request->name,
+                    'email'                => $request->email,
+                    'password'             => Hash::make($request->password),
+                    'phone_number'         => $request->phone_number,
+                    'location_id'          => $request->location_id,
+                    'latitude'             => $request->latitude,
+                    'longitude'            => $request->longitude,
+                    'location_verified_at' => $location_verified ? now() : null,
                 ]);
             });
 
             $token = $user->createToken('auth_token')->plainTextToken;
 
             return response()->json([
-                'success'      => true,
-                'message'      => 'User registered successfully',
-                'user'         => $user,
-                'access_token' => $token,
-                'token_type'   => 'Bearer',
+                'success'        => true,
+                'message'        => 'User registered successfully',
+                'user'           => $user,
+                'access_token'   => $token,
+                'token_type'     => 'Bearer',
+                'location_status'=> $user->location_verified_at ? 'verified' : 'unverified',
             ], 201);
         } catch (\Throwable $e) {
             Log::error('User registration failed', [
@@ -79,11 +107,12 @@ class AuthController extends Controller
         $token = $user->createToken('auth_token')->plainTextToken;
 
         return response()->json([
-            'success'      => true,
-            'message'      => 'Login successful',
-            'user'         => $user,
-            'access_token' => $token,
-            'token_type'   => 'Bearer'
+            'success'        => true,
+            'message'        => 'Login successful',
+            'user'           => $user,
+            'access_token'   => $token,
+            'token_type'     => 'Bearer',
+            'location_status'=> $user->location_verified_at ? 'verified' : 'unverified',
         ]);
     }
 }
