@@ -1,55 +1,310 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* =========================
+   Cloudimart global styles
+   Bootstrap + custom theme
+   ========================= */
 
-/* Fallback styles if Tailwind isn't configured yet */
-html, body {
-  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
-}
-
-.container { max-width: 1024px; margin: 0 auto; }
-/* Minimal global styles for the scaffolded app */
+/* Brand variables (used across the site) */
 :root {
-  --bg: #f8fafc;
+  --brand-blue: #2563EB;    /* primary trust color */
+  --brand-darkBlue: #1E40AF;
+  --brand-orange: #F97316;  /* primary CTA */
+  --bg-soft: #fbf7f2;       /* warm light background similar to screenshots */
+  --surface: #ffffff;
+  --muted: #6b7280;
+  --container-max: 1200px;
+  --card-radius: 14px;
+  --shadow-soft: 0 10px 30px rgba(2,6,23,0.06);
 }
 
-html, body, #__next { 
+/* -------------------------
+   Basic page layout
+   ------------------------- */
+html, body, #__next {
   height: 100%;
 }
 
 body {
   margin: 0;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
-  background: var(--bg);
-  color: #111827;
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  background: var(--bg-soft);
+  color: #0f172a; /* dark slate */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.45;
 }
 
-a { text-decoration: none; }
+/* link reset */
+a { text-decoration: none; color: inherit; }
 
-.container { max-width: 1024px; margin: 0 auto; padding: 1rem; }
-@import "tailwindcss";
-
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* central container utility (similar to screenshot width) */
+.container {
+  max-width: var(--container-max);
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 1rem;
+  padding-right: 1rem;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* topbar (thin strip above header with contact/support) */
+.topbar {
+  background: linear-gradient(#fff, #fff); /* subtle */
+  border-bottom: 1px solid rgba(0,0,0,0.04);
+  font-size: 0.95rem;
+  color: var(--muted);
+}
+.topbar .topbar-inner {
+  display:flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items:center;
+  padding: .4rem 0;
 }
 
-@media (prefers-color-scheme: dark) { 
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* header (logo + nav) */
+.site-header {
+  background: var(--surface);
+  border-bottom: 1px solid rgba(0,0,0,0.04);
+  padding: .9rem 0;
+  box-shadow: none;
+}
+.site-header .brand {
+  display:flex;
+  align-items:center;
+  gap:.75rem;
+  font-weight:700;
+  color: var(--brand-darkBlue);
+}
+.site-header .brand img.logo {
+  height: 36px;
+  width: auto;
+  object-fit: contain;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* main orange category/navigation bar under header */
+.category-bar {
+  background: linear-gradient(90deg, rgba(249,115,22,1), rgba(249,115,22,0.96));
+  color: #fff;
+  padding: .7rem 0;
 }
+.category-bar .category-inner {
+  display:flex;
+  align-items:center;
+  gap: 1rem;
+}
+.category-bar .category-item {
+  color: #fff;
+  font-weight:600;
+  padding: .45rem .9rem;
+  border-radius: 8px;
+  transition: background .15s ease, transform .08s;
+}
+.category-bar .category-item:hover {
+  background: rgba(255,255,255,0.06);
+  transform: translateY(-2px);
+}
+
+/* hero tweaks for Bootstrap hero or custom hero */
+.hero-section {
+  background: transparent;
+  padding: 3.5rem 0;
+}
+.hero-card {
+  background: var(--surface);
+  border-radius: calc(var(--card-radius) + 6px);
+  padding: 2.5rem;
+  box-shadow: var(--shadow-soft);
+}
+.hero-badge {
+  display:inline-block;
+  padding:.35rem .6rem;
+  border-radius: 999px;
+  background: rgba(37,99,235,0.08);
+  color: var(--brand-darkBlue);
+  font-weight:600;
+  font-size: .8rem;
+}
+
+/* Hero headings */
+.hero-title {
+  font-size: clamp(1.75rem, 3.5vw, 2.75rem);
+  line-height: 1.05;
+  color: #07122a;
+  margin: .5rem 0 1rem 0;
+}
+.hero-lead {
+  color: #334155;
+  max-width: 48rem;
+  margin-bottom: 1.4rem;
+}
+
+/* Buttons — primary orange & outline variant */
+.btn-cta {
+  display:inline-flex;
+  align-items:center;
+  gap:.6rem;
+  padding:.6rem 1.05rem;
+  border-radius: 999px;
+  font-weight:600;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.btn-cta-primary {
+  background: var(--brand-orange);
+  color: #fff;
+  border: 1px solid rgba(0,0,0,0.03);
+  box-shadow: 0 8px 20px rgba(249,115,22,0.12);
+}
+.btn-cta-primary:hover { transform: translateY(-3px); box-shadow: 0 18px 40px rgba(249,115,22,0.12); }
+
+.btn-cta-outline {
+  background: #fff;
+  color: var(--brand-orange);
+  border: 2px solid var(--brand-orange);
+}
+.btn-cta-outline:hover { background: var(--brand-orange); color: #fff; }
+
+/* decorative hero image glow */
+.hero-image-wrap {
+  position:relative;
+  display:block;
+  border-radius: 18px;
+  overflow: hidden;
+}
+.hero-image-glow {
+  position:absolute;
+  inset: -30px -20px -30px -20px;
+  z-index: 0;
+  background: linear-gradient(135deg, rgba(37,99,235,0.12), rgba(249,115,22,0.08));
+  filter: blur(36px);
+  border-radius: 22px;
+}
+
+/* -------------------------
+   Product card styles
+   ------------------------- */
+.products-grid {
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  align-items: start;
+}
+
+.product-card {
+  background: var(--surface);
+  border-radius: var(--card-radius);
+  padding: .9rem;
+  box-shadow: 0 6px 22px rgba(2,6,23,0.045);
+  display:flex;
+  flex-direction:column;
+  gap:.6rem;
+  transition: transform .12s ease, box-shadow .12s ease;
+  border: 1px solid rgba(0,0,0,0.03);
+}
+.product-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 16px 40px rgba(2,6,23,0.08);
+  border-color: rgba(0,0,0,0.06);
+}
+.product-card .media {
+  background: linear-gradient(180deg, #fff, #fff);
+  border-radius: 12px;
+  padding: .6rem;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  min-height: 150px;
+  overflow:hidden;
+}
+.product-card .media img {
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+  display:block;
+}
+
+/* product meta */
+.product-card .title {
+  font-weight: 700;
+  color: #07122a;
+  font-size: 0.98rem;
+  margin-top: .45rem;
+}
+.product-card .price {
+  color: var(--brand-orange);
+  font-weight: 700;
+  margin-top: .25rem;
+}
+.product-card .meta {
+  color: var(--muted);
+  font-size: .85rem;
+}
+
+/* Add to cart button (bottom right style similar to screenshot) */
+.product-card .card-footer {
+  margin-top: auto;
+  display:flex;
+  justify-content: space-between;
+  align-items:center;
+  gap: .6rem;
+}
+.btn-add {
+  background: var(--brand-orange);
+  color: white;
+  border-radius: 16px;
+  padding: .45rem .8rem;
+  font-weight:700;
+  box-shadow: 0 8px 20px rgba(249,115,22,0.12);
+  transition: transform .12s ease;
+}
+.btn-add:hover { transform: translateY(-3px); }
+
+/* product card highlight (active or on hover outline) */
+.product-card.highlight {
+  border: 2px solid rgba(249,115,22,0.12);
+  box-shadow: 0 20px 50px rgba(249,115,22,0.06);
+}
+
+/* small badges/labels inside card */
+.badge-small {
+  font-size: .72rem;
+  padding: .2rem .5rem;
+  border-radius: 999px;
+  background: rgba(37,99,235,0.08);
+  color: var(--brand-darkBlue);
+  font-weight:600;
+}
+
+/* -------------------------
+   Footer
+   ------------------------- */
+.site-footer {
+  background: #fff;
+  border-top: 1px solid rgba(0,0,0,0.04);
+  padding: 2rem 0;
+  color: var(--muted);
+}
+
+/* -------------------------
+   Small utilities used across
+   ------------------------- */
+.flex-center { display:flex; align-items:center; justify-content:center; gap:.5rem; }
+.hidden-mobile { display:block; }
+@media (max-width: 767px) { .hidden-mobile { display:none; } .product-card .media { min-height: 110px; } }
+
+/* -------------------------
+   Accessibility & form tweaks
+   ------------------------- */
+input[type="search"], input[type="text"], input[type="email"], input[type="password"], select {
+  border-radius:8px;
+  padding: .6rem .8rem;
+  border: 1px solid rgba(15,23,42,0.06);
+  outline: none;
+}
+input:focus, select:focus {
+  border-color: rgba(37,99,235,0.6);
+  box-shadow: 0 6px 18px rgba(37,99,235,0.08);
+}
+
+/* -------------------------
+   Minor fixes for bootstrap removal of tailwind
+   ------------------------- */
+.btn { border-radius: 999px; } /* rounded pills by default */

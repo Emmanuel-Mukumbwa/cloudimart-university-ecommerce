@@ -1,4 +1,5 @@
 // File: src/app/layout.tsx
+import 'bootstrap/dist/css/bootstrap.min.css';
 import './globals.css';
 import React from 'react';
 import Header from '../components/common/Header';

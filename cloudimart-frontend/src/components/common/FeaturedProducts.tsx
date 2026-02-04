@@ -13,7 +13,7 @@ export default function FeaturedProducts() {
   const [category, setCategory] = useState<string>('');
   const [categories, setCategories] = useState<{ id: number; name: string; slug?: string }[]>([]);
 
-  // Featured: per_page 6; pass category so products update
+  // featured: per_page 6; pass category so products update
   const { data, isLoading, isError } = useProducts({ page: 1, per_page: 6, category });
 
   useEffect(() => {
@@ -21,20 +21,19 @@ export default function FeaturedProducts() {
     client.get('/api/categories')
       .then((res) => {
         if (!mounted) return;
-        // handle common response shapes
         const payload = res.data?.data ?? res.data?.categories ?? res.data;
         setCategories(Array.isArray(payload) ? payload : []);
       })
       .catch(() => {
-        // silent fallback — keep categories empty
+        // silent fallback
       });
     return () => { mounted = false; };
   }, []);
 
   if (isLoading) {
     return (
-      <section className="bg-white">
-        <div className="container mx-auto px-6 py-12">
+      <section className="hero-section">
+        <div className="container">
           <div className="text-center"><LoadingSpinner /></div>
         </div>
       </section>
@@ -43,9 +42,9 @@ export default function FeaturedProducts() {
 
   if (isError) {
     return (
-      <section className="bg-white">
-        <div className="container mx-auto px-6 py-12">
-          <div className="text-center text-red-600">Failed to load products.</div>
+      <section className="hero-section">
+        <div className="container">
+          <div className="text-center text-danger">Failed to load products.</div>
         </div>
       </section>
     );
@@ -54,25 +53,24 @@ export default function FeaturedProducts() {
   const products = data?.data || [];
 
   return (
-    <section id="products" className="bg-white">
-      <div className="container mx-auto px-6 py-12">
-        <div className="rounded-md bg-white shadow-sm p-6">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-6 gap-4">
+    <section id="products" className="py-5">
+      <div className="container">
+        <div className="bg-white rounded p-4 shadow-sm">
+          <div className="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between mb-3 gap-3">
             <div>
-              <h2 className="text-2xl font-semibold text-slate-900">Featured products</h2>
-              <p className="text-sm text-slate-500">
+              <h2 className="h4 mb-1">Featured products</h2>
+              <p className="small text-muted mb-0">
                 Top Stationery & Dairy picks for the Mzuzu University community and nearby neighborhoods
               </p>
             </div>
 
-            <div className="flex items-center gap-4">
-              {/* category filter */}
+            <div className="d-flex align-items-center gap-3">
               <CategoryFilter categories={categories} value={category} onChange={setCategory} />
-              <Link href="/products" className="text-sm text-teal-600 font-medium">View all products →</Link>
+              <Link href="/products" className="small text-decoration-none text-primary">View all products →</Link>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="products-grid">
             {products.map((p: any) => (
               <ProductCard key={p.id} product={p} />
             ))}
