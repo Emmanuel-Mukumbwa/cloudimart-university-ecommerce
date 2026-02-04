@@ -81,6 +81,19 @@ class LocationCoordinatesSeeder extends Seeder
                 'created_at' => $now,
                 'updated_at' => $now,
             ],
+             [
+                'name' => 'Chitipa',
+                'slug' => 'chitipa',
+                'type' => 'residential',
+                'latitude' => -9.696192,
+                'longitude' => 33.281390,
+                'radius_km' => 0.00,
+                'description' => 'Test location - Outside Mzuzu University delivery zone. Used for testing location restrictions.',
+                'address' => '873J+GHC Chitipa',
+                'is_active' => true,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
         ];
 
         foreach ($locations as $loc) {
