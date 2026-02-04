@@ -12,6 +12,17 @@ use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\CheckoutController;
 use App\Http\Controllers\Api\DeliveryController;
 
+/*
+|--------------------------------------------------------------------------
+| API Routes
+|--------------------------------------------------------------------------
+|
+| Here is where you can register API routes for your application. These
+| routes are loaded by the RouteServiceProvider within a group which
+| is assigned the "api" middleware group. Enjoy building your API!
+|
+*/
+
 // ============================
 // 📍 PUBLIC ROUTES
 // ============================
@@ -30,7 +41,7 @@ Route::get('/products', [ProductController::class, 'index']);
 Route::get('/products/{id}', [ProductController::class, 'show']);
 
 // ============================
-// 🔒 PROTECTED ROUTES (Require Login) 
+// 🔒 PROTECTED ROUTES (Require Login)
 // ============================
 Route::middleware('auth:sanctum')->group(function () {
 
@@ -44,13 +55,17 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/cart/add', [CartController::class, 'add']);
     Route::put('/cart/item/{id}', [CartController::class, 'update']);
     Route::delete('/cart/item/{id}', [CartController::class, 'remove']);
+    // optional: cart count endpoint if you added it
+    Route::get('/cart/count', [CartController::class, 'count']);
 
     // --- 💳 Checkout + Orders --- //
+    // Validate location (server-side) before placing order
     Route::post('/checkout/validate-location', [CheckoutController::class, 'validateLocation']);
-    Route::post('/orders', [CheckoutController::class, 'placeOrder']);
+
+    // Two route names that point to the same controller method for convenience:
+    Route::post('/checkout/place-order', [CheckoutController::class, 'placeOrder']); // convenience alias
+    Route::post('/orders', [CheckoutController::class, 'placeOrder']); // original
 
     // --- 🚚 Delivery Verification --- //
     Route::post('/delivery/verify', [DeliveryController::class, 'verify']);
 });
-
-
