@@ -19,7 +19,7 @@ class LocationService
     {
         if (empty($polygon) || !is_array($polygon)) return false;
         $inside = false;
-        $n = count($polygon);
+        $n = count($polygon); 
         for ($i = 0, $j = $n - 1; $i < $n; $j = $i++) {
             $yi = $polygon[$i][0]; $xi = $polygon[$i][1];
             $yj = $polygon[$j][0]; $xj = $polygon[$j][1];

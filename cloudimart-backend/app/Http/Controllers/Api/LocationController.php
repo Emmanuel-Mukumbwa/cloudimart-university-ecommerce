@@ -27,7 +27,7 @@ class LocationController extends Controller
             'success' => true,
             'locations' => $locations,
         ]);
-    }
+    } 
 
     /**
      * POST /api/locations/validate

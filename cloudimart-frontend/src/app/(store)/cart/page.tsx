@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import client from '../../../lib/api/client';
 import { useCart } from '../../../context/CartContext';
+import { useRouter } from 'next/navigation';
 
 export default function CartPage() {
   const [items, setItems] = useState<any[]>([]);
@@ -10,20 +11,14 @@ export default function CartPage() {
   const { refreshCart } = useCart();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
 
   const normalizeItemsFromResponse = (res: any) => {
-    // Support multiple response shapes:
-    // - { success: true, data: { cart: {...}, items: [...] } }
-    // - { items: [...] }
-    // - { data: { items: [...] } }
     if (!res) return [];
     if (Array.isArray(res)) return res;
     const maybeItems = res?.data?.items ?? res?.items ?? res?.data?.data?.items ?? res?.data ?? null;
-    // If maybeItems is an object with items inside data, try deeper extraction
     if (Array.isArray(maybeItems)) return maybeItems;
-    // If top-level data contains { cart, items }, try that
     if (res?.data?.data?.items) return res.data.data.items;
-    // Last resort: if response contains items-like keys (very defensive)
     return [];
   };
 
@@ -45,10 +40,7 @@ export default function CartPage() {
     setError(null);
     try {
       const res = await client.get('/api/cart');
-      // Controller currently returns: { success:true, data: { cart:..., items: [...] } }
-      // But some other handlers might return { items: [...] } — support both
       let itemsArr = normalizeItemsFromResponse(res);
-      // If we still have empty items but the response includes data.items in a nested way, try to extract:
       if ((!itemsArr || itemsArr.length === 0) && res?.data?.data?.items) {
         itemsArr = res.data.data.items;
       }
@@ -66,12 +58,10 @@ export default function CartPage() {
 
   useEffect(() => {
     loadCart();
-    // If you want auto-refresh when count changes elsewhere, consider listening to a context event
   }, []);
 
   const removeItem = async (id: number) => {
     try {
-      // NOTE: your routes define DELETE /api/cart/item/{id}
       await client.delete(`/api/cart/item/${id}`);
       await refreshCart();
       await loadCart();
@@ -84,7 +74,9 @@ export default function CartPage() {
   if (loading) {
     return (
       <div className="container py-5 text-center">
-        <div className="spinner-border text-primary" role="status"><span className="visually-hidden">Loading...</span></div>
+        <div className="spinner-border text-primary" role="status">
+          <span className="visually-hidden">Loading...</span>
+        </div>
       </div>
     );
   }
@@ -118,11 +110,16 @@ export default function CartPage() {
                     return (
                       <tr key={i.id}>
                         <td>{i.product?.name ?? i.name ?? '—'}</td>
-                        <td>MK {Number(price).toFixed(2)}</td>
+                        <td>MK {price.toFixed(2)}</td>
                         <td>{qty}</td>
                         <td>MK {(price * qty).toFixed(2)}</td>
                         <td>
-                          <button className="btn btn-sm btn-outline-danger" onClick={() => removeItem(i.id)}>Remove</button>
+                          <button
+                            className="btn btn-sm btn-outline-danger"
+                            onClick={() => removeItem(i.id)}
+                          >
+                            Remove
+                          </button>
                         </td>
                       </tr>
                     );
@@ -131,8 +128,14 @@ export default function CartPage() {
               </table>
             </div>
 
-            <div className="d-flex justify-content-end">
-              <h5>Total: MK {Number(total).toFixed(2)}</h5>
+            <div className="d-flex justify-content-between align-items-center mt-4">
+              <h5>Total: MK {total.toFixed(2)}</h5>
+              <button
+                className="btn btn-primary btn-lg"
+                onClick={() => router.push('/checkout')}
+              >
+                Continue to Checkout →
+              </button>
             </div>
           </>
         )}
