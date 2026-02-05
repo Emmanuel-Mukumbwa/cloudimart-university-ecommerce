@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\CheckoutController;
 use App\Http\Controllers\Api\DeliveryController;
+use App\Http\Controllers\Api\OrdersController;
 
 /*
 |--------------------------------------------------------------------------
@@ -29,7 +30,7 @@ use App\Http\Controllers\Api\DeliveryController;
 
 // Locations (for dropdown + GPS validation)
 Route::get('/locations', [LocationController::class, 'index']);
-//Route::get('/locations/{id}', [LocationController::class, 'show']);
+Route::get('/locations/{id}', [LocationController::class, 'show']);
 Route::post('/locations/validate', [LocationController::class, 'validatePoint']);
 
 // Authentication
@@ -56,16 +57,20 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/cart/add', [CartController::class, 'add']);
     Route::put('/cart/item/{id}', [CartController::class, 'update']);
     Route::delete('/cart/item/{id}', [CartController::class, 'remove']);
-    // optional: cart count endpoint if you added it
+    // optional: cart count endpoint (if implemented in controller)
     Route::get('/cart/count', [CartController::class, 'count']);
 
     // --- 💳 Checkout + Orders --- //
     // Validate location (server-side) before placing order
     Route::post('/checkout/validate-location', [CheckoutController::class, 'validateLocation']);
 
-    // Two route names that point to the same controller method for convenience:
-    Route::post('/checkout/place-order', [CheckoutController::class, 'placeOrder']); // convenience alias
-    Route::post('/orders', [CheckoutController::class, 'placeOrder']); // original
+    // Place order (two convenient routes pointing to the same handler)
+    Route::post('/checkout/place-order', [CheckoutController::class, 'placeOrder']);
+    Route::post('/orders', [CheckoutController::class, 'placeOrder']);
+
+    // Orders listing / count for the logged-in user
+    Route::get('/orders', [OrdersController::class, 'index']);
+    Route::get('/orders/count', [OrdersController::class, 'count']);
 
     // --- 🚚 Delivery Verification --- //
     Route::post('/delivery/verify', [DeliveryController::class, 'verify']);
