@@ -1,8 +1,9 @@
-//src/app/(store)/checkout/page.tsx
+// src/app/(store)/checkout/page.tsx
 'use client';
 import React, { useEffect, useState } from 'react';
 import client from '../../../lib/api/client';
 import { useRouter } from 'next/navigation';
+import CenteredModal from '../../../components/common/CenteredModal';
 
 type Loc = {
   id: number;
@@ -33,44 +34,9 @@ export default function CheckoutPage() {
   const [selectedLocationId, setSelectedLocationId] = useState<number | ''>('');
   const [showFallbackChoice, setShowFallbackChoice] = useState(false);
 
-  const [modal, setModal] = useState<ModalState>({ show: false });
+  const [modal, setModal] = useState<ModalState>({ show: false, title: '', body: '' });
 
   const router = useRouter();
-
-  // Lightweight centered modal (rendered inside this file for SSR-safety)
-  function CenteredModal({ show, title, body, onClose }: { show: boolean; title?: string; body?: React.ReactNode; onClose: () => void; }) {
-    if (!show) return null;
-    return (
-      <>
-        <div
-          className="modal-backdrop fade show"
-          style={{ zIndex: 1050, position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)' }}
-        />
-        <div
-          className="modal fade show d-block"
-          tabIndex={-1}
-          role="dialog"
-          style={{ zIndex: 1060 }}
-        >
-          <div className="modal-dialog modal-dialog-centered" role="document">
-            <div className="modal-content">
-              {title && (
-                <div className="modal-header">
-                  <h5 className="modal-title">{title}</h5>
-                </div>
-              )}
-              <div className="modal-body">
-                {typeof body === 'string' ? <p>{body}</p> : body}
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-primary" onClick={onClose}>OK</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </>
-    );
-  }
 
   const loadCart = async () => {
     try {
@@ -88,35 +54,27 @@ export default function CheckoutPage() {
     }
   };
 
-  // Load locations (and user) — prefer user's registered location as default
   const loadLocationsAndUser = async () => {
     try {
       const res = await client.get('/api/locations');
       const payload = res.data.locations ?? res.data.data ?? res.data;
-      if (Array.isArray(payload)) {
-        setLocations(payload);
-      } else if (Array.isArray(res.data)) {
-        setLocations(res.data);
-      } else {
-        setLocations([]);
-      }
+      if (Array.isArray(payload)) setLocations(payload);
+      else if (Array.isArray(res.data)) setLocations(res.data);
     } catch (e) {
-      console.warn('Failed to load locations', e);
       setLocations([]);
     }
 
-    // Try to fetch current user and set selected location if present
+    // Try to set user's registered location if available
     try {
-      const userRes = await client.get('/api/user');
-      const user = userRes.data?.user ?? userRes.data;
+      const u = await client.get('/api/user');
+      const user = u.data?.user ?? u.data;
       if (user && user.location_id) {
         setSelectedLocationId(user.location_id);
-      } else {
-        // fallback to first location if available
-        setSelectedLocationId((prev) => prev === '' && locations.length > 0 ? locations[0].id : prev);
+      } else if (!selectedLocationId && locations.length > 0) {
+        setSelectedLocationId(locations[0].id);
       }
     } catch (e) {
-      // unauthenticated or failure — default to first location later if none selected
+      // not logged or error, just default later
       if (!selectedLocationId && locations.length > 0) setSelectedLocationId(locations[0].id);
     }
   };
@@ -127,7 +85,6 @@ export default function CheckoutPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // validate point and set detected/verified, but only set UI 'outside' message once validation finishes
   const validatePointAndSet = async (lat: number, lng: number, location_id?: number | '') => {
     setError(null);
     setDetectedArea(null);
@@ -166,7 +123,7 @@ export default function CheckoutPage() {
     }
   };
 
-  // Request GPS, validate with backend and display coords + detected area
+  // GPS request with 30s timeout & automatic fallback
   const requestGps = async () => {
     setError(null);
     setDetectedArea(null);
@@ -183,8 +140,6 @@ export default function CheckoutPage() {
     const success = async (pos: GeolocationPosition) => {
       const lat = pos.coords.latitude;
       const lng = pos.coords.longitude;
-
-      // set coords immediately but DO NOT show "outside" until validation finishes
       setGps({ lat, lng });
 
       try {
@@ -194,10 +149,10 @@ export default function CheckoutPage() {
       }
     };
 
-    // on error: auto fallback to selected location (if possible), otherwise prompt choice
     const errorCb = async (err: GeolocationPositionError) => {
       console.warn('Geolocation error', err);
       setVerifying(false);
+      setShowFallbackChoice(true);
 
       switch (err.code) {
         case err.PERMISSION_DENIED:
@@ -212,13 +167,10 @@ export default function CheckoutPage() {
           break;
       }
 
-      // Automatic fallback if the user has selected a location
       if (selectedLocationId) {
-        // call fallback automatically
-        await useSelectedLocationFallback(true); // auto mode
+        // automatic fallback when selected location exists
+        await useSelectedLocationFallback(true);
       } else {
-        // no selected location available — show user choice
-        setShowFallbackChoice(true);
         setModal({
           show: true,
           title: 'GPS failed',
@@ -227,11 +179,7 @@ export default function CheckoutPage() {
       }
     };
 
-    const options: PositionOptions = {
-      enableHighAccuracy: true,
-      timeout: 30000,
-      maximumAge: 0,
-    };
+    const options: PositionOptions = { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 };
 
     try {
       navigator.geolocation.getCurrentPosition(success, errorCb, options);
@@ -243,8 +191,6 @@ export default function CheckoutPage() {
     }
   };
 
-  // Use selected dropdown location as fallback — fetch coords if needed then validate
-  // If autoFallback === true then we don't show fallback messages prompting the user, just run validation.
   const useSelectedLocationFallback = async (autoFallback = false) => {
     setError(null);
     setDetectedArea(null);
@@ -252,16 +198,12 @@ export default function CheckoutPage() {
 
     if (!selectedLocationId) {
       setError('Please select a fallback location from the dropdown.');
-      if (!autoFallback) {
-        setModal({ show: true, title: 'No location selected', body: 'Please select a fallback location.' });
-      }
+      if (!autoFallback) setModal({ show: true, title: 'No location selected', body: 'Please select a fallback location.' });
       return;
     }
 
-    // Find location in already-fetched list
     let loc = locations.find((l) => Number(l.id) === Number(selectedLocationId));
 
-    // If the location doesn't have coords in the list, try fetching single endpoint
     if (!loc || loc.latitude === undefined || loc.longitude === undefined || loc.latitude === null || loc.longitude === null) {
       try {
         const res = await client.get(`/api/locations/${selectedLocationId}`);
@@ -283,7 +225,6 @@ export default function CheckoutPage() {
       return;
     }
 
-    // Use loc coords as GPS
     const lat = Number(loc.latitude);
     const lng = Number(loc.longitude);
     setGps({ lat, lng });
@@ -291,15 +232,6 @@ export default function CheckoutPage() {
 
     try {
       await validatePointAndSet(lat, lng, selectedLocationId);
-
-      // If validation succeeded, blur (disable) the select so user can't change verified location.
-      if (detectedArea || verified) {
-        /* nothing here — handled by UI via `verified` state */
-      }
-
-      if (!autoFallback) {
-        // show a friendly modal summarizing fallback result (validatePointAndSet already sets the modal)
-      }
     } catch (err: any) {
       console.error('Fallback validation error', err);
       setError(err?.response?.data?.message ?? 'Fallback validation failed');
@@ -312,30 +244,25 @@ export default function CheckoutPage() {
     }
   };
 
-  // Place order — include coords and address. Backend must re-validate.
   const placeOrder = async () => {
     setError(null);
 
     if (!cartItems.length) {
-      setError('Your cart is empty.');
       setModal({ show: true, title: 'Cart empty', body: 'Your cart is empty.' });
       return;
     }
 
     if (!verified) {
-      setError('Please verify your delivery location (GPS or fallback) before placing the order.');
       setModal({ show: true, title: 'Not verified', body: 'Please verify your delivery location (GPS or fallback) before placing the order.' });
       return;
     }
 
     if (!gps.lat || !gps.lng) {
-      setError('GPS coordinates missing. Please verify location or use the fallback.');
       setModal({ show: true, title: 'Missing coordinates', body: 'GPS coordinates missing. Please verify location or use the fallback.' });
       return;
     }
 
     if (!address || address.trim().length < 3) {
-      setError('Please enter a delivery address (hostel/room/office).');
       setModal({ show: true, title: 'Missing address', body: 'Please enter a delivery address (hostel/room/office).' });
       return;
     }
@@ -345,37 +272,35 @@ export default function CheckoutPage() {
         delivery_lat: gps.lat,
         delivery_lng: gps.lng,
         delivery_address: address.trim(),
+        // default payment choice for now
+        payment_method: 'cod',
       };
 
       const res = await client.post('/api/checkout/place-order', payload);
+
       if (res.data?.success) {
         setModal({ show: true, title: 'Order placed', body: `Order placed — Order ID: ${res.data.order_id ?? '(check orders page)'}` });
-        // after user closes modal we redirect. We'll do that in modal close handler below.
-        // keep router.push in modal close handler for user to read message.
-        // store order id redirect action on close if needed
       } else {
-        setError(res.data?.message ?? 'Failed to place order');
         setModal({ show: true, title: 'Order failed', body: res.data?.message ?? 'Failed to place order' });
       }
     } catch (err: any) {
       console.error('Place order error', err);
-      setError(err?.response?.data?.message ?? 'Failed to place order');
       setModal({ show: true, title: 'Order failed', body: err?.response?.data?.message ?? 'Failed to place order' });
     }
   };
 
-  // Modal close handler — handle special redirects after success
   const handleCloseModal = () => {
-    const bodyText = typeof modal.body === 'string' ? modal.body : undefined;
-    // if order success text contains "Order placed" then redirect to /orders
+    // If order placed modal, redirect to orders page
     if (modal.title === 'Order placed') {
       setModal({ show: false });
       router.push('/orders');
       return;
     }
-
     setModal({ show: false });
   };
+
+  // disable place-order until verified and address supplied
+  const placeOrderDisabled = !verified || address.trim().length < 3;
 
   return (
     <div className="container py-5">
@@ -435,7 +360,7 @@ export default function CheckoutPage() {
                   className="form-select"
                   value={selectedLocationId}
                   onChange={(e) => setSelectedLocationId(e.target.value ? Number(e.target.value) : '')}
-                  disabled={verified} // blur/select disabled after verification
+                  disabled={verified}
                 >
                   <option value="">Choose location</option>
                   {locations.map((l) => (
@@ -450,11 +375,7 @@ export default function CheckoutPage() {
               </div>
 
               <div className="d-flex gap-2 align-items-center">
-                <button
-                  className="btn btn-outline-primary"
-                  onClick={requestGps}
-                  disabled={verifying}
-                >
+                <button className="btn btn-outline-primary" onClick={requestGps} disabled={verifying}>
                   {verifying ? 'Verifying...' : verified ? 'Location Verified ✓' : 'Verify via GPS'}
                 </button>
 
@@ -468,13 +389,11 @@ export default function CheckoutPage() {
                   )}
                 </div>
 
-                {/* If GPS fails and no selected location, offer fallback button; otherwise automatic fallback runs */}
                 {!selectedLocationId && showFallbackChoice && (
                   <button
                     className="btn btn-outline-secondary"
                     onClick={() => useSelectedLocationFallback(false)}
                     disabled={!selectedLocationId || verifying}
-                    title={selectedLocationId ? 'Use this location as fallback' : 'Select a location first'}
                   >
                     Use selected location as fallback
                   </button>
@@ -482,16 +401,11 @@ export default function CheckoutPage() {
               </div>
 
               <div className="mt-2">
-                {/* only show 'outside' message after validation finished (not while verifying) */}
                 {detectedArea ? (
-                  <div className="alert alert-success mb-0 p-2">
-                    Detected area: <strong>{detectedArea.name}</strong>
-                  </div>
+                  <div className="alert alert-success mb-0 p-2">Detected area: <strong>{detectedArea.name}</strong></div>
                 ) : (
                   !verifying && gps.lat && gps.lng && !verified && (
-                    <div className="alert alert-warning mb-0 p-2">
-                      Coordinates are outside delivery zones.
-                    </div>
+                    <div className="alert alert-warning mb-0 p-2">Coordinates are outside delivery zones.</div>
                   )
                 )}
               </div>
@@ -500,11 +414,7 @@ export default function CheckoutPage() {
             {error && <div className="alert alert-danger">{error}</div>}
 
             <div className="d-flex justify-content-end">
-              <button
-                className="btn btn-success btn-lg"
-                onClick={placeOrder}
-                disabled={!verified}
-              >
+              <button className="btn btn-success btn-lg" onClick={placeOrder} disabled={placeOrderDisabled}>
                 Place Order
               </button>
             </div>
