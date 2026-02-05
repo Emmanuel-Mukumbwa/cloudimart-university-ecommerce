@@ -35,34 +35,49 @@ class PaymentController extends Controller
             'status'  => 'pending',
         ]);
 
+        // Get keys from env / services config
+        $secretKey = env('PAYCHANGU_SECRET_KEY') ?? config('services.paychangu.secret');
+        $publicKey = env('PAYCHANGU_PUBLIC_KEY') ?? config('services.paychangu.public');
+
+        if (!$secretKey) {
+            Log::error('PayChangu: missing secret key');
+            $payment->update(['status' => 'failed']);
+            return response()->json(['error' => 'Payment initiation configuration error (missing secret key).'], 500);
+        }
+
+        // Build callback and return URLs (ensure FRONTEND_URL is set in .env)
+        $callbackUrl = route('payment.callback');
+        $frontend = env('FRONTEND_URL', env('APP_URL'));
+        $returnUrl = rtrim($frontend, '/') . '/store/checkout?tx_ref=' . $txRef;
+
         try {
-            $secretKey = config('services.paychangu.secret');
-            $callbackUrl = route('payment.callback');
-            $returnUrl = config('app.frontend_url') . '/store/checkout?tx_ref=' . $txRef;
-
             $response = Http::withHeaders([
-                'Authorization' => 'Bearer ' . $secretKey,
-                'Accept'        => 'application/json',
-            ])->post('https://api.paychangu.com/payment', [
-                'amount'       => $request->amount,
-                'currency'     => 'MWK',
-                'callback_url' => $callbackUrl,
-                'return_url'   => $returnUrl,
-                'tx_ref'       => $txRef,
-                'network'      => $request->network,
-                'phone_number' => preg_replace('/^0/', '265', $request->mobile),
-                'first_name'   => $user?->name ?? 'Customer',
-                'email'        => $user?->email ?? null,
-                'customization' => [
-                    'title'       => 'Cloudimart Checkout',
-                    'description' => 'Secure payment for order',
-                ],
-                'meta' => [
-                    'source' => 'CloudimartApp'
-                ],
-            ]);
+                    'Authorization' => 'Bearer ' . $secretKey,
+                    'Accept'        => 'application/json',
+                ])
+                ->timeout(60)
+                ->post('https://api.paychangu.com/payment', [
+                    'amount'       => $request->amount,
+                    'currency'     => 'MWK',
+                    'callback_url' => $callbackUrl,
+                    'return_url'   => $returnUrl,
+                    'tx_ref'       => $txRef,
+                    'network'      => $request->network,
+                    'phone_number' => preg_replace('/^0/', '265', $request->mobile),
+                    'first_name'   => $user?->name ?? 'Customer',
+                    'email'        => $user?->email ?? null,
+                    'customization' => [
+                        'title'       => 'Cloudimart Checkout',
+                        'description' => 'Secure payment for order',
+                    ],
+                    'meta' => [
+                        'source' => 'CloudimartApp'
+                    ],
+                ]);
 
-            Log::info('PayChangu initiate', ['resp' => $response->json()]);
+            // Log raw response for visibility
+            $respBody = $response->body();
+            Log::info('PayChangu initiate', ['status' => $response->status(), 'body' => $respBody]);
 
             if ($response->successful() && data_get($response->json(), 'status') === 'success') {
                 $checkoutUrl = data_get($response->json(), 'data.checkout_url');
@@ -76,12 +91,30 @@ class PaymentController extends Controller
                 ]);
             }
 
+            // If we get here, provider returned non-success
             $payment->update(['status' => 'failed']);
-            return response()->json(['error' => 'Failed to initialize payment'], 500);
+
+            // Give helpful error in debug, otherwise generic
+            $msg = 'Failed to initialize payment';
+            if (config('app.debug')) {
+                return response()->json([
+                    'error' => $msg,
+                    'provider_status' => $response->status(),
+                    'provider_body' => $respBody
+                ], 500);
+            }
+
+            return response()->json(['error' => $msg], 500);
 
         } catch (\Throwable $th) {
             Log::error('PayChangu error', ['message' => $th->getMessage()]);
             $payment->update(['status' => 'failed']);
+
+            // In debug mode return exception message for rapid debugging
+            if (config('app.debug')) {
+                return response()->json(['error' => 'Payment initiation failed', 'exception' => $th->getMessage()], 500);
+            }
+
             return response()->json(['error' => 'Payment initiation failed'], 500);
         }
     }
