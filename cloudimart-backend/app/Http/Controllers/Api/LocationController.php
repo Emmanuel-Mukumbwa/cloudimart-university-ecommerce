@@ -19,13 +19,39 @@ class LocationController extends Controller
     /**
      * GET /api/locations
      * Return locations for dropdown lists (only active ones by default).
+     * Now includes coordinates so frontend can use fallback without extra fetch.
      */
     public function index()
     {
-        $locations = Location::where('is_active', true)->orderBy('name')->get(['id', 'name']);
+        // include more fields (id, name, latitude, longitude, radius_km) for fallback usage
+        $locations = Location::where('is_active', true)
+            ->orderBy('name')
+            ->get(['id', 'name', 'latitude', 'longitude', 'radius_km']);
+
         return response()->json([
             'success' => true,
             'locations' => $locations,
+        ]);
+    }
+
+    /**
+     * GET /api/locations/{id}
+     * Return full single location details (404 if not found).
+     */
+    public function show($id)
+    {
+        $loc = Location::find($id);
+
+        if (! $loc) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Location not found'
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'location' => $loc,
         ]);
     }
 
@@ -48,7 +74,7 @@ class LocationController extends Controller
         // Check if point is within any defined delivery zone
         $insideAny = $this->locationService->isWithinDeliveryZone($lat, $lng);
 
-        // By default we will attempt to find the specific detected area (if any)
+        // Attempt to find the specific detected area (if any)
         $detected = null;
         $areas = Location::where('is_active', true)->get();
         foreach ($areas as $area) {
@@ -62,7 +88,7 @@ class LocationController extends Controller
                 $inside = $dist <= (float)$area->radius_km;
             }
             if ($inside) {
-                $detected = ['id' => $area->id, 'name' => $area->name, 'is_deliverable' => $area->is_deliverable];
+                $detected = ['id' => $area->id, 'name' => $area->name];
                 break;
             }
         }

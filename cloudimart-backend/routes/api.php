@@ -29,6 +29,7 @@ use App\Http\Controllers\Api\DeliveryController;
 
 // Locations (for dropdown + GPS validation)
 Route::get('/locations', [LocationController::class, 'index']);
+//Route::get('/locations/{id}', [LocationController::class, 'show']);
 Route::post('/locations/validate', [LocationController::class, 'validatePoint']);
 
 // Authentication
