@@ -12,6 +12,8 @@ use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\CheckoutController;
 use App\Http\Controllers\Api\DeliveryController;
 use App\Http\Controllers\Api\OrdersController;
+use App\Http\Controllers\Api\PaymentController;
+use App\Http\Controllers\Api\NotificationController;
 
 /*
 |--------------------------------------------------------------------------
@@ -42,6 +44,9 @@ Route::get('/categories', [CategoryController::class, 'index']);
 Route::get('/products', [ProductController::class, 'index']);
 Route::get('/products/{id}', [ProductController::class, 'show']);
 
+// Public webhook (PayChangu will call this)
+Route::post('/payment/callback', [PaymentController::class, 'callback'])->name('payment.callback');
+
 // ============================
 // 🔒 PROTECTED ROUTES (Require Login)
 // ============================
@@ -60,6 +65,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // optional: cart count endpoint (if implemented in controller)
     Route::get('/cart/count', [CartController::class, 'count']);
 
+    // --- 💳 Payments --- //
+    Route::post('/payment/initiate', [PaymentController::class, 'initiate']);
+    Route::get('/payment/status', [PaymentController::class, 'status']);
+
     // --- 💳 Checkout + Orders --- //
     // Validate location (server-side) before placing order
     Route::post('/checkout/validate-location', [CheckoutController::class, 'validateLocation']);
@@ -71,6 +80,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // Orders listing / count for the logged-in user
     Route::get('/orders', [OrdersController::class, 'index']);
     Route::get('/orders/count', [OrdersController::class, 'count']);
+
+    // --- 🔔 Notifications (in-app) --- //
+    Route::get('/notifications', [NotificationController::class, 'index']);
+    Route::post('/notifications/{id}/read', [NotificationController::class, 'markRead']);
 
     // --- 🚚 Delivery Verification --- //
     Route::post('/delivery/verify', [DeliveryController::class, 'verify']);

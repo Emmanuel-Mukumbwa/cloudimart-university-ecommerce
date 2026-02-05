@@ -1,6 +1,7 @@
-// src/app/(store)/checkout/page.tsx
+// File: src/app/(store)/checkout/page.tsx
 'use client';
-import React, { useEffect, useState } from 'react';
+
+import React, { useEffect, useState, useRef } from 'react';
 import client from '../../../lib/api/client';
 import { useRouter } from 'next/navigation';
 import CenteredModal from '../../../components/common/CenteredModal';
@@ -17,43 +18,64 @@ type ModalState = {
   show: boolean;
   title?: string;
   body?: React.ReactNode;
-};
+}; 
 
 export default function CheckoutPage() {
+  const router = useRouter();
+
+  // Cart + totals
   const [cartItems, setCartItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
 
+  // Location / GPS
   const [gps, setGps] = useState<{ lat?: number; lng?: number }>({});
   const [verifying, setVerifying] = useState(false);
   const [verified, setVerified] = useState(false);
   const [detectedArea, setDetectedArea] = useState<{ id?: number; name?: string } | null>(null);
+
+  // Address + UI
   const [address, setAddress] = useState(''); // delivery address text user must enter
   const [error, setError] = useState<string | null>(null);
 
+  // Locations dropdown + fallback behavior
   const [locations, setLocations] = useState<Loc[]>([]);
   const [selectedLocationId, setSelectedLocationId] = useState<number | ''>('');
   const [showFallbackChoice, setShowFallbackChoice] = useState(false);
 
+  // Modal
   const [modal, setModal] = useState<ModalState>({ show: false, title: '', body: '' });
 
-  const router = useRouter();
+  // Payment state & polling
+  const [paymentTxRef, setPaymentTxRef] = useState<string | null>(null);
+  const [paymentStatus, setPaymentStatus] = useState<'idle' | 'pending' | 'success' | 'failed'>('idle');
+  const pollingRef = useRef<number | null>(null);
 
+  useEffect(() => {
+    loadCart();
+    loadLocationsAndUser();
+
+    return () => {
+      if (pollingRef.current) {
+        window.clearInterval(pollingRef.current);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load cart items and totals
   const loadCart = async () => {
     try {
       const res = await client.get('/api/cart');
       const items = res.data.items || res.data.data?.items || [];
       setCartItems(items);
-      const total = items.reduce(
-        (sum: number, i: any) => sum + Number(i.product?.price ?? 0) * (i.quantity ?? 1),
-        0
-      );
-      setTotal(total);
+      setTotal(items.reduce((sum: number, i: any) => sum + Number(i.product?.price ?? 0) * (i.quantity ?? 1), 0));
     } catch (e) {
       setCartItems([]);
       setTotal(0);
     }
   };
 
+  // Load locations and (optionally) user to set default selected location
   const loadLocationsAndUser = async () => {
     try {
       const res = await client.get('/api/locations');
@@ -64,27 +86,23 @@ export default function CheckoutPage() {
       setLocations([]);
     }
 
-    // Try to set user's registered location if available
     try {
       const u = await client.get('/api/user');
       const user = u.data?.user ?? u.data;
       if (user && user.location_id) {
         setSelectedLocationId(user.location_id);
-      } else if (!selectedLocationId && locations.length > 0) {
+      } else if (!selectedLocationId && (locations && locations.length > 0)) {
         setSelectedLocationId(locations[0].id);
       }
     } catch (e) {
-      // not logged or error, just default later
-      if (!selectedLocationId && locations.length > 0) setSelectedLocationId(locations[0].id);
+      // ignore if unauthenticated
+      if (!selectedLocationId && (locations && locations.length > 0)) {
+        setSelectedLocationId(locations[0].id);
+      }
     }
   };
 
-  useEffect(() => {
-    loadCart();
-    loadLocationsAndUser();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
+  // Validate coordinates via backend and set detected/verified state
   const validatePointAndSet = async (lat: number, lng: number, location_id?: number | '') => {
     setError(null);
     setDetectedArea(null);
@@ -103,9 +121,10 @@ export default function CheckoutPage() {
         setModal({
           show: true,
           title: 'Location verified',
-          body: detected && detected.name
-            ? `You are inside: ${detected.name}\nLat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`
-            : `Location verified (inside delivery area).\nLat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`,
+          body:
+            detected && detected.name
+              ? `You are inside: ${detected.name}\nLat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`
+              : `Location verified (inside delivery area).\nLat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`,
         });
       } else {
         setModal({
@@ -123,7 +142,7 @@ export default function CheckoutPage() {
     }
   };
 
-  // GPS request with 30s timeout & automatic fallback
+  // Request GPS with options and automatic fallback
   const requestGps = async () => {
     setError(null);
     setDetectedArea(null);
@@ -168,7 +187,7 @@ export default function CheckoutPage() {
       }
 
       if (selectedLocationId) {
-        // automatic fallback when selected location exists
+        // automatic fallback when a selected location exists
         await useSelectedLocationFallback(true);
       } else {
         setModal({
@@ -191,6 +210,7 @@ export default function CheckoutPage() {
     }
   };
 
+  // Use selected location as fallback (fetch coords if missing)
   const useSelectedLocationFallback = async (autoFallback = false) => {
     setError(null);
     setDetectedArea(null);
@@ -244,6 +264,100 @@ export default function CheckoutPage() {
     }
   };
 
+  // --- PAYMENT: initiate (calls your backend) ---
+  const getUserPhone = async (): Promise<string | null> => {
+    try {
+      const res = await client.get('/api/user');
+      const user = res.data?.user ?? res.data;
+      return user?.phone_number ?? null;
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const initiatePayment = async () => {
+    setError(null);
+    if (!verified) {
+      setModal({ show: true, title: 'Need verification', body: 'Please verify location first before making payment.' });
+      return;
+    }
+    if (!address || address.trim().length < 3) {
+      setModal({ show: true, title: 'Address required', body: 'Please enter a delivery address before payment.' });
+      return;
+    }
+
+    try {
+      const payload = {
+        amount: total,
+        mobile: (await getUserPhone()) || '',
+        network: 'mpamba',
+        delivery_lat: gps.lat,
+        delivery_lng: gps.lng,
+        delivery_address: address.trim(),
+      };
+
+      const res = await client.post('/api/payment/initiate', payload);
+      const checkoutUrl = res.data.checkout_url;
+      const txRef = res.data.tx_ref ?? res.data.data?.tx_ref ?? null;
+
+      if (!checkoutUrl || !txRef) {
+        setModal({ show: true, title: 'Payment error', body: 'Payment initiation failed (no URL or tx_ref).' });
+        return;
+      }
+
+      setPaymentTxRef(txRef);
+      setPaymentStatus('pending');
+
+      // open checkout in a new tab so user can complete payment
+      window.open(checkoutUrl, '_blank');
+
+      // start polling payment status
+      startPollingPaymentStatus(txRef);
+
+      setModal({ show: true, title: 'Payment started', body: 'Payment started. Complete the payment in the opened tab. This page will enable Place Order once payment completes.' });
+    } catch (err: any) {
+      setModal({ show: true, title: 'Payment failed', body: err?.response?.data?.error ?? err?.message ?? 'Failed to initiate payment.' });
+    }
+  };
+
+  // Polling payment status
+  const startPollingPaymentStatus = (txRef: string) => {
+    if (pollingRef.current) window.clearInterval(pollingRef.current);
+
+    const start = Date.now();
+    const timeoutMs = 5 * 60 * 1000; // 5 minutes
+    const intervalMs = 3000; // 3s
+
+    // use window.setInterval id (number)
+    pollingRef.current = window.setInterval(async () => {
+      try {
+        const res = await client.get('/api/payment/status', { params: { tx_ref: txRef } });
+        const status = res.data?.status ?? res.data?.payment?.status ?? null;
+
+        if (status === 'success') {
+          setPaymentStatus('success');
+          if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
+          setModal({ show: true, title: 'Payment confirmed', body: `Payment ${txRef} confirmed. You can now place the order.` });
+        } else if (status === 'failed') {
+          setPaymentStatus('failed');
+          if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
+          setModal({ show: true, title: 'Payment failed', body: 'Payment failed or was cancelled.' });
+        } else {
+          setPaymentStatus('pending');
+        }
+      } catch (e) {
+        console.warn('Payment poll error', e);
+      }
+
+      if (Date.now() - start > timeoutMs) {
+        if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
+        setPaymentStatus('failed');
+        setModal({ show: true, title: 'Payment timeout', body: 'Payment not confirmed within 5 minutes. Please try again.' });
+      }
+    }, intervalMs);
+  };
+
+  // Place Order: requires paymentStatus === 'success'
   const placeOrder = async () => {
     setError(null);
 
@@ -267,13 +381,18 @@ export default function CheckoutPage() {
       return;
     }
 
+    // Enforce that payment was completed before allowing order placement
+    if (!paymentTxRef || paymentStatus !== 'success') {
+      setModal({ show: true, title: 'Payment required', body: 'Please make and confirm a payment first.' });
+      return;
+    }
+
     try {
-      const payload = {
+      const payload: any = {
+        tx_ref: paymentTxRef,
         delivery_lat: gps.lat,
         delivery_lng: gps.lng,
         delivery_address: address.trim(),
-        // default payment choice for now
-        payment_method: 'cod',
       };
 
       const res = await client.post('/api/checkout/place-order', payload);
@@ -290,7 +409,6 @@ export default function CheckoutPage() {
   };
 
   const handleCloseModal = () => {
-    // If order placed modal, redirect to orders page
     if (modal.title === 'Order placed') {
       setModal({ show: false });
       router.push('/orders');
@@ -299,8 +417,8 @@ export default function CheckoutPage() {
     setModal({ show: false });
   };
 
-  // disable place-order until verified and address supplied
-  const placeOrderDisabled = !verified || address.trim().length < 3;
+  // Place order disabled until payment confirmed + address present
+  const placeOrderDisabled = !(paymentStatus === 'success' && address.trim().length >= 3);
 
   return (
     <div className="container py-5">
@@ -379,7 +497,7 @@ export default function CheckoutPage() {
                   {verifying ? 'Verifying...' : verified ? 'Location Verified ✓' : 'Verify via GPS'}
                 </button>
 
-                <div className="small text-muted">
+                <div className="small text-muted ms-3">
                   {gps.lat && gps.lng ? (
                     <>
                       Lat: <strong>{gps.lat.toFixed(6)}</strong>, Lng: <strong>{gps.lng.toFixed(6)}</strong>
@@ -389,14 +507,20 @@ export default function CheckoutPage() {
                   )}
                 </div>
 
-                {!selectedLocationId && showFallbackChoice && (
+                {showFallbackChoice && (
                   <button
-                    className="btn btn-outline-secondary"
+                    className="btn btn-outline-secondary ms-3"
                     onClick={() => useSelectedLocationFallback(false)}
                     disabled={!selectedLocationId || verifying}
                   >
                     Use selected location as fallback
                   </button>
+                )}
+
+                {paymentTxRef && (
+                  <div className="ms-3 small">
+                    Payment: <strong>{paymentStatus}</strong> {paymentTxRef ? `(tx: ${paymentTxRef})` : null}
+                  </div>
                 )}
               </div>
 
@@ -413,7 +537,17 @@ export default function CheckoutPage() {
 
             {error && <div className="alert alert-danger">{error}</div>}
 
-            <div className="d-flex justify-content-end">
+            <div className="d-flex justify-content-end gap-3">
+              {/* Make Payment button */}
+              <button
+                className="btn btn-primary"
+                onClick={initiatePayment}
+                disabled={!verified || address.trim().length < 3 || paymentStatus === 'pending'}
+              >
+                {paymentStatus === 'pending' ? 'Payment pending...' : 'Make Payment'}
+              </button>
+
+              {/* Place Order button (only enabled after successful payment) */}
               <button className="btn btn-success btn-lg" onClick={placeOrder} disabled={placeOrderDisabled}>
                 Place Order
               </button>
