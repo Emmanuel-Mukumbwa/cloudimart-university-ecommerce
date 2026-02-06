@@ -37,7 +37,7 @@ return [
 
     'paychangu' => [
     'secret' => env('PAYCHANGU_SECRET_KEY'),
-    'public' => env('PAYCHANGU_PUBLIC_KEY'),
+    'public' => env('PAYCHANGU_PUBLIC_KEY'), 
 ],
 
 ];
