@@ -14,16 +14,17 @@ use App\Http\Controllers\Api\DeliveryController;
 use App\Http\Controllers\Api\OrdersController;
 use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\NotificationController;
+use App\Http\Controllers\Api\AdminController;
 
 /*
 |--------------------------------------------------------------------------
 | API Routes
 |--------------------------------------------------------------------------
 |
-| Here is where you can register API routes for your application. These
-| routes are loaded by the RouteServiceProvider within a group which
-| is assigned the "api" middleware group. Enjoy building your API!
-|
+| These routes handle authentication, payments, orders, deliveries, and
+| admin functionality for Cloudimart. Sanctum authentication ensures
+| secure access. Role middleware limits routes to specific roles.
+|--------------------------------------------------------------------------
 */
 
 // ============================
@@ -44,16 +45,15 @@ Route::get('/categories', [CategoryController::class, 'index']);
 Route::get('/products', [ProductController::class, 'index']);
 Route::get('/products/{id}', [ProductController::class, 'show']);
 
-// Public webhook (PayChangu will call this)
-//Route::post('/payment/callback', [PaymentController::class, 'handleCallback'])->name('api.payment.callback');
-//Route::post('/payment/callback', [PaymentController::class, 'callback'])->name('payment.callback');
+// Public webhook (PayChangu callback)
+/// Route::post('/payment/callback', [PaymentController::class, 'callback'])->name('payment.callback');
 
 // ============================
 // 🔒 PROTECTED ROUTES (Require Login)
 // ============================
 Route::middleware('auth:sanctum')->group(function () {
 
-    // Get logged-in user
+    // --- 👤 Get logged-in user --- //
     Route::get('/user', function (Request $request) {
         return $request->user();
     });
@@ -63,33 +63,43 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/cart/add', [CartController::class, 'add']);
     Route::put('/cart/item/{id}', [CartController::class, 'update']);
     Route::delete('/cart/item/{id}', [CartController::class, 'remove']);
-    // optional: cart count endpoint (if implemented in controller)
-    Route::get('/cart/count', [CartController::class, 'count']);
+    Route::get('/cart/count', [CartController::class, 'count']); // optional
 
     // --- 💳 Payments --- //
     Route::post('/payment/initiate', [PaymentController::class, 'initiate']);
     Route::get('/payment/status', [PaymentController::class, 'status']);
 
-    // --- 💳 Checkout + Orders --- //
-    // Validate location (server-side) before placing order
+    // --- 🧾 Checkout + Orders --- //
     Route::post('/checkout/validate-location', [CheckoutController::class, 'validateLocation']);
-
-    // Place order (two convenient routes pointing to the same handler)
     Route::post('/checkout/place-order', [CheckoutController::class, 'placeOrder']);
-    Route::post('/orders', [CheckoutController::class, 'placeOrder']);
-
-    // Orders listing / count for the logged-in user
+    Route::post('/orders', [CheckoutController::class, 'placeOrder']); // alias
     Route::get('/orders', [OrdersController::class, 'index']);
     Route::get('/orders/count', [OrdersController::class, 'count']);
 
     // --- 🔔 Notifications (in-app) --- //
     Route::get('/notifications', [NotificationController::class, 'index']);
-    Route::post('/notifications/{id}/read', [NotificationController::class, 'markRead']);
-    // --- Unread notifications count (for badge) --- //
     Route::get('/notifications/unread-count', [NotificationController::class, 'unreadCount']);
+    Route::post('/notifications/{id}/read', [NotificationController::class, 'markRead']);
 
-
-    // --- 🚚 Delivery Verification --- //
+    // --- 🚚 Delivery Verification (Accessible by logged-in delivery role) --- //
     Route::post('/delivery/verify', [DeliveryController::class, 'verify']);
+});
 
+// ============================
+// 🧑‍💼 ADMIN ROUTES
+// ============================
+Route::middleware(['auth:sanctum', 'role:admin'])->group(function () {
+    Route::get('/admin/orders', [AdminController::class, 'orders']);
+    Route::post('/admin/orders/{id}/status', [AdminController::class, 'updateOrderStatus']);
+    Route::get('/admin/dashboard', [AdminController::class, 'dashboard']);
+    // add more admin features here later (user management, reports, etc.)
+});
+
+// ============================
+// 🚚 DELIVERY ROUTES
+// ============================
+Route::middleware(['auth:sanctum', 'role:delivery'])->group(function () {
+    Route::get('/delivery/dashboard', [DeliveryController::class, 'dashboard']);
+    Route::post('/delivery/orders/{id}/complete', [DeliveryController::class, 'completeOrder']);
+    // Reuse verify endpoint from above or override behavior if needed
 });
