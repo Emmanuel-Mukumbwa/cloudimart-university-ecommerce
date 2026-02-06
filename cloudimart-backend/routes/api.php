@@ -45,7 +45,8 @@ Route::get('/products', [ProductController::class, 'index']);
 Route::get('/products/{id}', [ProductController::class, 'show']);
 
 // Public webhook (PayChangu will call this)
-Route::post('/payment/callback', [PaymentController::class, 'callback'])->name('payment.callback');
+//Route::post('/payment/callback', [PaymentController::class, 'handleCallback'])->name('api.payment.callback');
+//Route::post('/payment/callback', [PaymentController::class, 'callback'])->name('payment.callback');
 
 // ============================
 // 🔒 PROTECTED ROUTES (Require Login)
