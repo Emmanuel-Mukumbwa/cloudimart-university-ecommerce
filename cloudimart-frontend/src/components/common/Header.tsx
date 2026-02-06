@@ -12,22 +12,22 @@ export default function Header() {
 
   useEffect(() => {
     let mounted = true;
+    let intervalId: number | undefined;
 
     const loadCounts = async () => {
       try {
-        const [ordersRes, notifRes] = await Promise.all([
-          client.get('/api/orders/count'),
-          client.get('/api/notifications'),
-        ]);
+        // orders/count returns active orders (non-delivered)
+        const ordersPromise = client.get('/api/orders/count');
+        // unread-count is lightweight and ideal for the header
+        const notifPromise = client.get('/api/notifications/unread-count');
+
+        const [ordersRes, notifRes] = await Promise.all([ordersPromise, notifPromise]);
 
         if (!mounted) return;
 
         setOrdersCount(ordersRes.data?.count ?? 0);
-        const unread = (notifRes.data?.notifications ?? []).filter(
-          (n: any) => !n.is_read
-        ).length;
-        setNotifCount(unread);
-      } catch {
+        setNotifCount(notifRes.data?.count ?? 0);
+      } catch (err) {
         if (!mounted) return;
         setOrdersCount(0);
         setNotifCount(0);
@@ -35,10 +35,12 @@ export default function Header() {
     };
 
     loadCounts();
-    const interval = setInterval(loadCounts, 30000); // refresh every 30s
+    // refresh every 30s
+    intervalId = window.setInterval(loadCounts, 30000);
+
     return () => {
       mounted = false;
-      clearInterval(interval);
+      if (intervalId) window.clearInterval(intervalId);
     };
   }, []);
 
@@ -75,9 +77,7 @@ export default function Header() {
             />
             <div>
               <div style={{ fontWeight: 800, fontSize: 18 }}>Cloudimart</div>
-              <div
-                style={{ fontSize: 12, color: 'rgba(255,255,255,0.92)' }}
-              >
+              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.92)' }}>
                 Mzuzu University community
               </div>
             </div>
@@ -112,12 +112,20 @@ export default function Header() {
               className="text-white text-decoration-none small d-flex align-items-center"
             >
               Orders
-              <span className="badge bg-secondary ms-2">
+              <span
+                className="badge bg-secondary ms-2"
+                style={{
+                  fontWeight: 700,
+                  minWidth: 24,
+                  textAlign: 'center',
+                  borderRadius: 999,
+                }}
+              >
                 {ordersCount}
               </span>
             </Link>
 
-
+            {/* Cart button */}
             <Link
               href="/cart"
               className="btn btn-light btn-sm ms-3 d-flex align-items-center"
@@ -160,16 +168,18 @@ export default function Header() {
                   textAlign: 'center',
                   borderRadius: 999,
                 }}
+                aria-live="polite"
               >
                 {typeof count === 'number' ? count : 0}
               </span>
             </Link>
 
-                        {/* Notification Bell */}
+            {/* Notification Bell - kept at the end after cart */}
             <Link
               href="/notifications"
-              className="text-white position-relative d-flex align-items-center small"
+              className="text-white position-relative d-flex align-items-center small ms-2"
               style={{ textDecoration: 'none' }}
+              aria-label="Notifications"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -177,9 +187,11 @@ export default function Header() {
                 height="20"
                 fill="white"
                 viewBox="0 0 24 24"
+                aria-hidden="true"
               >
                 <path d="M12 24a2.4 2.4 0 0 0 2.4-2.4h-4.8A2.4 2.4 0 0 0 12 24zM18 17v-5c0-3.07-1.63-5.64-4.5-6.32V5a1.5 1.5 0 0 0-3 0v.68C7.63 6.36 6 8.92 6 12v5l-1.29 1.29A1 1 0 0 0 6 20h12a1 1 0 0 0 .71-1.71L18 17z" />
               </svg>
+
               {notifCount > 0 && (
                 <span
                   className="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
@@ -189,7 +201,6 @@ export default function Header() {
                 </span>
               )}
             </Link>
-
           </nav>
         </div>
       </header>
