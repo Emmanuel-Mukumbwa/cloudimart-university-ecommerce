@@ -7,160 +7,197 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use App\Models\Payment;
-use App\Models\Notification;
-use Illuminate\Support\Str;
+use Exception;
 
 class PaymentController extends Controller
 {
+    /**
+     * POST /api/payment/initiate
+     * Expects: amount, mobile, network, delivery_lat, delivery_lng, delivery_address
+     * Returns: { checkout_url, tx_ref }
+     */
     public function initiate(Request $request)
     {
         $request->validate([
-            'amount' => 'required|numeric|min:100',
+            'amount' => 'required|numeric|min:1',
             'mobile' => 'required|string',
-            'network' => 'required|in:mpamba,airtel',
+            'network' => 'required|string', // e.g. 'mpamba' or 'airtel'
             'delivery_lat' => 'nullable|numeric',
             'delivery_lng' => 'nullable|numeric',
-            'delivery_address' => 'nullable|string|max:255',
+            'delivery_address' => 'nullable|string',
         ]);
 
-        $user = $request->user();
-        $txRef = 'cloudimart_' . Str::random(10);
+        // create unique merchant tx ref
+        $txRef = uniqid('pay_');
 
+        // Create a local payment record
         $payment = Payment::create([
-            'user_id' => $user?->id,
-            'tx_ref'  => $txRef,
-            'mobile'  => $request->mobile,
+            'user_id' => auth()->id(),
+            'tx_ref' => $txRef,
+            'amount' => $request->amount,
+            'currency' => 'MWK',
+            'status' => 'pending',
+            'mobile' => $request->mobile,
             'network' => $request->network,
-            'amount'  => $request->amount,
-            'status'  => 'pending',
+            'meta' => [
+                'delivery_lat' => $request->delivery_lat,
+                'delivery_lng' => $request->delivery_lng,
+                'delivery_address' => $request->delivery_address,
+            ],
         ]);
-
-        // Get keys from env / services config
-        $secretKey = env('PAYCHANGU_SECRET_KEY') ?? config('services.paychangu.secret');
-        $publicKey = env('PAYCHANGU_PUBLIC_KEY') ?? config('services.paychangu.public');
-
-        if (!$secretKey) {
-            Log::error('PayChangu: missing secret key');
-            $payment->update(['status' => 'failed']);
-            return response()->json(['error' => 'Payment initiation configuration error (missing secret key).'], 500);
-        }
-
-        // Build callback and return URLs (ensure FRONTEND_URL is set in .env)
-        $callbackUrl = route('payment.callback');
-        $frontend = env('FRONTEND_URL', env('APP_URL'));
-        $returnUrl = rtrim($frontend, '/') . '/store/checkout?tx_ref=' . $txRef;
 
         try {
+            $secretKey = config('services.paychangu.secret');
+
+            $payload = [
+                'amount' => $request->amount,
+                'currency' => 'MWK',
+                // Make sure this route name exists in api.php (named below)
+                //'callback_url' => route('api.payment.callback'),
+                'callback_url' => config('app.url') . '/api/payment/callback',
+                // Optional: frontend return URL after user completes checkout
+                'return_url' => config('app.url'), // or env('FRONTEND_URL')
+                'tx_ref' => $txRef,
+                'first_name' => auth()->user()->name ?? null,
+                'last_name' => null,
+                'email' => auth()->user()->email ?? null,
+                'network' => $request->network,
+                // normalize mobile to international (you already do this elsewhere)
+                'phone_number' => preg_replace('/^0/', '265', $request->mobile),
+                'customization' => [
+                    'title' => 'Order Payment',
+                    'description' => 'Payment for items - ' . $txRef,
+                ],
+                'meta' => [
+                    'source' => 'LaravelApi',
+                    'payment_id' => $payment->id,
+                ],
+            ];
+
             $response = Http::withHeaders([
                     'Authorization' => 'Bearer ' . $secretKey,
-                    'Accept'        => 'application/json',
+                    'Accept' => 'application/json',
                 ])
                 ->timeout(60)
-                ->post('https://api.paychangu.com/payment', [
-                    'amount'       => $request->amount,
-                    'currency'     => 'MWK',
-                    'callback_url' => $callbackUrl,
-                    'return_url'   => $returnUrl,
-                    'tx_ref'       => $txRef,
-                    'network'      => $request->network,
-                    'phone_number' => preg_replace('/^0/', '265', $request->mobile),
-                    'first_name'   => $user?->name ?? 'Customer',
-                    'email'        => $user?->email ?? null,
-                    'customization' => [
-                        'title'       => 'Cloudimart Checkout',
-                        'description' => 'Secure payment for order',
-                    ],
-                    'meta' => [
-                        'source' => 'CloudimartApp'
-                    ],
-                ]);
+                ->post('https://api.paychangu.com/payment', $payload);
 
-            // Log raw response for visibility
-            $respBody = $response->body();
-            Log::info('PayChangu initiate', ['status' => $response->status(), 'body' => $respBody]);
+            Log::info('PayChangu initiate response', ['response' => $response->json()]);
 
             if ($response->successful() && data_get($response->json(), 'status') === 'success') {
-                $checkoutUrl = data_get($response->json(), 'data.checkout_url');
-                $providerRef = data_get($response->json(), 'data.id');
-
-                $payment->update(['provider_ref' => $providerRef]);
-
+                // Return checkout_url and tx_ref to frontend
                 return response()->json([
-                    'checkout_url' => $checkoutUrl,
-                    'tx_ref'       => $txRef,
-                ]);
+                    'checkout_url' => data_get($response->json(), 'data.checkout_url'),
+                    'tx_ref' => $txRef,
+                ], 200);
             }
 
-            // If we get here, provider returned non-success
+            // mark failed locally
             $payment->update(['status' => 'failed']);
+            return response()->json(['error' => $response->body()], 500);
 
-            // Give helpful error in debug, otherwise generic
-            $msg = 'Failed to initialize payment';
-            if (config('app.debug')) {
-                return response()->json([
-                    'error' => $msg,
-                    'provider_status' => $response->status(),
-                    'provider_body' => $respBody
-                ], 500);
-            }
-
-            return response()->json(['error' => $msg], 500);
-
-        } catch (\Throwable $th) {
-            Log::error('PayChangu error', ['message' => $th->getMessage()]);
+        } catch (Exception $e) {
+            Log::error('PayChangu initiate error', ['message' => $e->getMessage()]);
             $payment->update(['status' => 'failed']);
-
-            // In debug mode return exception message for rapid debugging
-            if (config('app.debug')) {
-                return response()->json(['error' => 'Payment initiation failed', 'exception' => $th->getMessage()], 500);
-            }
-
-            return response()->json(['error' => 'Payment initiation failed'], 500);
+            return response()->json(['error' => $e->getMessage()], 500);
         }
     }
 
+    /**
+     * GET /api/payment/status?tx_ref=...
+     * Returns { status: 'pending'|'success'|'failed', payment: {...} }
+     * This checks DB first; if still pending, calls PayChangu verify endpoint.
+     */
     public function status(Request $request)
     {
-        $request->validate(['tx_ref' => 'required|string']);
-        $payment = Payment::where('tx_ref', $request->tx_ref)->first();
-
-        if (!$payment) {
-            return response()->json(['error' => 'Payment not found'], 404);
+        $txRef = $request->query('tx_ref') ?? $request->input('tx_ref');
+        if (empty($txRef)) {
+            return response()->json(['message' => 'tx_ref required'], 400);
         }
 
-        return response()->json(['status' => $payment->status, 'payment' => $payment]);
-    }
-
-    public function callback(Request $request)
-    {
-        Log::info('PayChangu callback', ['payload' => $request->all()]);
-
-        $txRef = $request->tx_ref ?? $request->transaction_reference;
-        $status = strtolower($request->status ?? 'pending');
-
         $payment = Payment::where('tx_ref', $txRef)->first();
-        if (!$payment) {
+        if (! $payment) {
             return response()->json(['message' => 'Payment not found'], 404);
         }
 
-        if ($payment->status !== 'success') {
-            $mapped = match ($status) {
-                'successful', 'success', 'paid' => 'success',
-                'failed', 'declined' => 'failed',
-                default => 'pending'
-            };
-
-            $payment->update(['status' => $mapped, 'meta' => $request->all()]);
-
-            if ($mapped === 'success') {
-                Notification::create([
-                    'user_id' => $payment->user_id,
-                    'title'   => 'Payment Successful',
-                    'message' => "Your payment of MWK {$payment->amount} was successful. Ref: {$payment->tx_ref}",
-                ]);
-            }
+        // If already finalised locally, return immediately
+        if (in_array($payment->status, ['success', 'failed'])) {
+            return response()->json(['status' => $payment->status, 'payment' => $payment], 200);
         }
 
-        return response()->json(['message' => 'Callback processed']);
+        // Otherwise call PayChangu verify endpoint
+        try {
+            $secretKey = config('services.paychangu.secret');
+
+            $res = Http::withHeaders([
+                'Authorization' => 'Bearer ' . $secretKey,
+                'Accept' => 'application/json',
+            ])->get("https://api.paychangu.com/verify-payment/{$txRef}");
+
+            Log::info('PayChangu verify response', ['tx_ref' => $txRef, 'response' => $res->json()]);
+
+            if ($res->successful() && data_get($res->json(), 'status') === 'success') {
+                $remoteStatus = data_get($res->json(), 'data.status'); // e.g. 'success' or 'failed'
+                $providerRef = data_get($res->json(), 'data.transaction_id') ?? data_get($res->json(), 'data.transactionId');
+
+                if ($remoteStatus === 'success') {
+                    $payment->update([
+                        'status' => 'success',
+                        'provider_ref' => $providerRef,
+                    ]);
+                } elseif ($remoteStatus === 'failed') {
+                    $payment->update(['status' => 'failed']);
+                }
+            } else {
+                // if verify failed (non-200) keep pending — but return remote body for debugging
+                return response()->json(['status' => $payment->status, 'remote' => $res->json()], 200);
+            }
+        } catch (Exception $e) {
+            Log::error('PayChangu verify error', ['message' => $e->getMessage(), 'tx_ref' => $txRef]);
+            // return local status but include error message for diagnostics
+            return response()->json(['status' => $payment->status, 'error' => $e->getMessage()], 200);
+        }
+
+        $payment->refresh();
+        return response()->json(['status' => $payment->status, 'payment' => $payment], 200);
+    }
+
+    /**
+     * POST /api/payment/callback
+     * PayChangu will redirect/call this with tx_ref and status (and maybe transaction_id)
+     */
+    public function handleCallback(Request $request)
+    {
+        Log::info('PayChangu callback payload', ['payload' => $request->all()]);
+
+        $txRef = $request->input('tx_ref') ?? $request->input('transaction_reference') ?? null;
+        $status = $request->input('status') ?? null;
+        $providerRef = $request->input('transaction_id') ?? $request->input('transaction_id') ?? null;
+
+        if (! $txRef) {
+            return response()->json(['message' => 'tx_ref missing'], 400);
+        }
+
+        $payment = Payment::where('tx_ref', $txRef)->first();
+
+        if (! $payment) {
+            return response()->json(['message' => 'Payment not found'], 404);
+        }
+
+        // Map remote to local statuses (adjust if PayChangu uses different words)
+        if ($status === 'success') {
+            $payment->update([
+                'status' => 'success',
+                'provider_ref' => $providerRef,
+            ]);
+        } elseif ($status === 'failed') {
+            $payment->update(['status' => 'failed']);
+        } else {
+            // unknown status — persist raw payload to meta for later debugging
+            $meta = $payment->meta ?? [];
+            $meta = array_merge(is_array($meta) ? $meta : json_decode($meta, true) ?? [], ['last_callback' => $request->all()]);
+            $payment->update(['meta' => $meta]);
+        }
+
+        return response()->json(['message' => 'Payment updated'], 200);
     }
 }
