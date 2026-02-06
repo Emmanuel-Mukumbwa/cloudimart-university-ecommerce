@@ -1,3 +1,4 @@
+//src/app/(store)/orders/page.tsx
 'use client';
 
 import React, { useEffect, useState } from 'react';
@@ -18,13 +19,52 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const statusLabel = (s: string) => {
+    switch (s) {
+      case 'pending_delivery':
+        return 'Pending delivery';
+      case 'pending':
+        return 'Pending';
+      case 'delivered':
+        return 'Delivered';
+      case 'completed':
+        // backwards-compat: if any legacy rows exist
+        return 'Completed';
+      default:
+        // fallback: convert snake-case to spaced words (simple)
+        return s.replace(/_/g, ' ');
+    }
+  };
+
+  const statusBadgeClass = (s: string) => {
+    switch (s) {
+      case 'pending_delivery':
+        return 'bg-warning text-dark'; // waiting for delivery
+      case 'pending':
+        return 'bg-secondary text-white'; // waiting stage
+      case 'delivered':
+        return 'bg-success';
+      case 'completed':
+        return 'bg-success'; // treat completed as success if present
+      default:
+        return 'bg-info text-white';
+    }
+  };
+
   const loadOrders = async () => {
     setLoading(true);
     setError(null);
     try {
       const res = await client.get('/api/orders');
       const data = res.data?.data ?? res.data ?? [];
-      setOrders(Array.isArray(data) ? data : data?.data ?? []);
+      // If API returns a paginated object, data may be an object with .data array
+      if (Array.isArray(data)) {
+        setOrders(data);
+      } else if (Array.isArray(res.data?.data)) {
+        setOrders(res.data.data);
+      } else {
+        setOrders([]);
+      }
     } catch (e: any) {
       setError(e?.userMessage ?? 'Failed to load orders');
     } finally {
@@ -71,16 +111,8 @@ export default function OrdersPage() {
                 <tr key={o.id}>
                   <td>{o.order_id}</td>
                   <td>
-                    <span
-                      className={`badge ${
-                        o.status === 'completed'
-                          ? 'bg-success'
-                          : o.status === 'pending'
-                          ? 'bg-warning text-dark'
-                          : 'bg-info'
-                      }`}
-                    >
-                      {o.status}
+                    <span className={`badge ${statusBadgeClass(o.status)}`}>
+                      {statusLabel(o.status)}
                     </span>
                   </td>
                   <td>{Number(o.total).toFixed(2)}</td>
@@ -95,3 +127,4 @@ export default function OrdersPage() {
     </div>
   );
 }
+

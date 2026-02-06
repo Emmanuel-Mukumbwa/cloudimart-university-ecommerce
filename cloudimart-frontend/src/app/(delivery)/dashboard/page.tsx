@@ -16,7 +16,8 @@ type Order = {
   status: string;
   created_at: string;
   user: { id: number; name: string; phone_number: string } | null;
-  order_items?: OrderItem[];
+  order_items?: OrderItem[]; // API may return order_items or orderItems
+  orderItems?: OrderItem[];
 };
 
 export default function DeliveryDashboardPage() {
@@ -79,6 +80,32 @@ export default function DeliveryDashboardPage() {
     }
   };
 
+  const statusLabel = (s: string) => {
+    switch (s) {
+      case 'pending_delivery':
+        return 'Pending delivery';
+      case 'pending':
+        return 'Pending';
+      case 'delivered':
+        return 'Delivered';
+      default:
+        return s;
+    }
+  };
+
+  const statusBadgeClass = (s: string) => {
+    switch (s) {
+      case 'pending_delivery':
+        return 'bg-warning text-dark';
+      case 'pending':
+        return 'bg-secondary';
+      case 'delivered':
+        return 'bg-success';
+      default:
+        return 'bg-info';
+    }
+  };
+
   if (loading) {
     return (
       <div className="container py-5 text-center">
@@ -123,42 +150,53 @@ export default function DeliveryDashboardPage() {
           <div className="text-muted">No active orders to deliver.</div>
         ) : (
           <div className="list-group">
-            {orders.map((o) => (
-              <div key={o.id} className="list-group-item mb-2 shadow-sm">
-                <div className="d-flex justify-content-between">
-                  <div>
-                    <div className="fw-bold">{o.order_id}</div>
-                    <div className="small text-muted">Customer: {o.user?.name ?? '—'} — {o.user?.phone_number ?? '—'}</div>
-                    <div className="mt-2">Address: {o.delivery_address}</div>
-                    <div className="mt-2">Total: MK {Number(o.total).toFixed(2)}</div>
+            {orders.map((o) => {
+              const items = (o as any).order_items ?? (o as any).orderItems ?? [];
+              const readableStatus = statusLabel(o.status);
+              const badgeClass = statusBadgeClass(o.status);
 
-                    {o.order_items && o.order_items.length > 0 && (
-                      <div className="mt-2">
-                        <strong>Items:</strong>
-                        <ul className="small mb-0">
-                          {o.order_items.map((it: any) => (
-                            <li key={it.id}>
-                              {it.product?.name ?? 'Product'} × {it.quantity} — MK {Number(it.price).toFixed(2)}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="text-end">
-                    <div className="mb-2"><span className={`badge ${o.status === 'completed' ? 'bg-success' : o.status === 'pending' ? 'bg-warning text-dark' : 'bg-info'}`}>{o.status}</span></div>
-                    <div className="mb-2 small text-muted">{new Date(o.created_at).toLocaleString()}</div>
+              return (
+                <div key={o.id} className="list-group-item mb-2 shadow-sm">
+                  <div className="d-flex justify-content-between">
                     <div>
-                      <button className="btn btn-sm btn-success me-2" onClick={() => handleComplete(o.id)}>Mark delivered</button>
+                      <div className="fw-bold">{o.order_id}</div>
+                      <div className="small text-muted">Customer: {o.user?.name ?? '—'} — {o.user?.phone_number ?? '—'}</div>
+                      <div className="mt-2">Address: {o.delivery_address}</div>
+                      <div className="mt-2">Total: MK {Number(o.total).toFixed(2)}</div>
+
+                      {items && items.length > 0 && (
+                        <div className="mt-2">
+                          <strong>Items:</strong>
+                          <ul className="small mb-0">
+                            {items.map((it: any) => (
+                              <li key={it.id}>
+                                {(it.product?.name ?? it.product_name ?? 'Product')} × {it.quantity} — MK {Number(it.price).toFixed(2)}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="text-end">
+                      <div className="mb-2">
+                        <span className={`badge ${badgeClass}`}>{readableStatus}</span>
+                      </div>
+                      <div className="mb-2 small text-muted">{new Date(o.created_at).toLocaleString()}</div>
+                      <div>
+                        {o.status !== 'delivered' && (
+                          <button className="btn btn-sm btn-success me-2" onClick={() => handleComplete(o.id)}>Mark delivered</button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
     </div>
   );
 }
+

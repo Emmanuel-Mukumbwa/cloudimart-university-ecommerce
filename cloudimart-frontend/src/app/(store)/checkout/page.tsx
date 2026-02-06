@@ -290,7 +290,7 @@ export default function CheckoutPage() {
       const payload = {
         amount: total,
         mobile: (await getUserPhone()) || '',
-        network: 'mpamba',
+        network: 'mpampa',
         delivery_lat: gps.lat,
         delivery_lng: gps.lng,
         delivery_address: address.trim(),
@@ -398,7 +398,11 @@ export default function CheckoutPage() {
       const res = await client.post('/api/checkout/place-order', payload);
 
       if (res.data?.success) {
-        setModal({ show: true, title: 'Order placed', body: `Order placed — Order ID: ${res.data.order_id ?? '(check orders page)'}` });
+        // show status (prefer returned order.status if present)
+        const returnedStatus = res.data.order?.status ?? 'pending_delivery';
+        const statusLabel = returnedStatus === 'pending_delivery' ? 'Pending delivery' : returnedStatus;
+
+        setModal({ show: true, title: 'Order placed', body: `Order placed — Order ID: ${res.data.order_id ?? '(check orders page)'}\nStatus: ${statusLabel}` });
       } else {
         setModal({ show: true, title: 'Order failed', body: res.data?.message ?? 'Failed to place order' });
       }
@@ -558,3 +562,4 @@ export default function CheckoutPage() {
     </div>
   );
 }
+

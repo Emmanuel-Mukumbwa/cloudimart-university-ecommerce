@@ -14,7 +14,7 @@ class Order extends Model
         'user_id',
         'total',
         'delivery_address',
-        'delivery_lat',
+        'delivery_lat', 
         'delivery_lng',
         'status',
     ];
