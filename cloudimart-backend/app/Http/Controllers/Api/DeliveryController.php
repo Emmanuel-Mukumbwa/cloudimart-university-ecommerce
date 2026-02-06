@@ -14,119 +14,142 @@ use Illuminate\Support\Facades\Log;
 class DeliveryController extends Controller
 {
     /**
+     * Restrict to delivery users only.
+     */
+    protected function ensureDeliveryRole($user)
+    {
+        if (! $user || $user->role !== 'delivery') {
+            return response()->json(['message' => 'Forbidden – Delivery access only'], 403)->send();
+            exit; // stop further execution
+        }
+    }
+
+    /**
      * GET /api/delivery/dashboard
      * Returns list of active (not delivered) orders for delivery personnel.
-     * This will include orders with status 'pending' and 'pending_delivery'.
+     * Includes orders with status 'pending' and 'pending_delivery'.
      */
     public function dashboard(Request $request)
     {
         $user = $request->user();
+        $this->ensureDeliveryRole($user); // ✅ internal role check
 
-        // Return all orders where status is not 'delivered'. Includes pending_delivery.
-        $orders = Order::where('status', '!=', 'delivered')
-            ->with([
-                'user:id,name,phone_number',
-                // ensure relation name matches your Order model method (orderItems)
-                'orderItems.product:id,name,price'
-            ])
-            ->orderBy('created_at', 'asc')
-            ->get();
+        try {
+            // Fetch all orders not yet delivered
+            $orders = Order::where('status', '!=', 'delivered')
+                ->with([
+                    'user:id,name,phone_number',
+                    'items.product:id,name,price' // ✅ fixed relation name
+                ])
+                ->orderBy('created_at', 'asc')
+                ->get();
 
-        return response()->json(['orders' => $orders]);
+            return response()->json(['orders' => $orders]);
+        } catch (\Throwable $e) {
+            Log::error('Delivery.dashboard error', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json(['message' => 'Failed to load orders'], 500);
+        }
     }
 
     /**
      * POST /api/delivery/orders/{id}/complete
-     * Mark order as delivered (by DB id).
-     * Idempotent: safe to call multiple times.
+     * Mark order as delivered (by internal ID).
+     * Safe to call multiple times (idempotent).
      */
     public function completeOrder(Request $request, $id)
     {
-        $deliveryPerson = $request->user();
+        $user = $request->user();
+        $this->ensureDeliveryRole($user); // ✅ internal role check
 
         DB::beginTransaction();
         try {
-            $order = Order::with('user')->findOrFail($id);
+            $order = Order::with('user')->findOrFail($id); 
 
-            // Idempotent: if already delivered, return success with existing data
+            // Already delivered?
             if ($order->status === 'delivered') {
                 return response()->json([
-                    'success' => true,
-                    'message' => 'Order already marked delivered',
+                    'success'  => true,
+                    'message'  => 'Order already marked delivered',
                     'order_id' => $order->order_id,
                 ]);
             }
 
             // Create or update delivery record
-            $delivery = Delivery::where('order_id', $order->id)->first();
-            if (! $delivery) {
-                $delivery = Delivery::create([
-                    'order_id' => $order->id,
-                    'delivery_person' => $deliveryPerson->name ?? null,
-                    'status' => 'completed',
-                    'verification_code' => null,
-                ]);
-            } else {
-                $delivery->update([
-                    'delivery_person' => $deliveryPerson->name ?? $delivery->delivery_person,
-                    'status' => 'completed',
-                    'verification_code' => null,
-                ]);
-            }
+            $delivery = Delivery::firstOrNew(['order_id' => $order->id]);
+            $delivery->delivery_person = $user->name ?? $delivery->delivery_person;
+            $delivery->status = 'completed';
+            $delivery->verification_code = null;
+            $delivery->save();
 
-            // Update order status to delivered
+            // Update order
             $order->update(['status' => 'delivered']);
 
-            // Create transaction record (log)
+            // Log transaction
             Transaction::create([
                 'order_id' => $order->id,
-                'type' => 'delivery',
-                'amount' => $order->total,
+                'type'     => 'delivery',
+                'amount'   => $order->total,
                 'currency' => 'MWK',
-                'status' => 'completed',
-                'meta' => json_encode(['delivered_by' => $delivery->delivery_person ?? 'unknown']),
+                'status'   => 'completed',
+                'meta'     => json_encode([
+                    'delivered_by' => $delivery->delivery_person ?? 'unknown'
+                ]),
             ]);
 
-            // Create in-app notification for the buyer
+            // Notify customer
             Notification::create([
                 'user_id' => $order->user_id,
-                'title' => 'Order Delivered',
+                'title'   => 'Order Delivered',
                 'message' => "Your order #{$order->order_id} has been delivered by {$delivery->delivery_person}.",
             ]);
 
             DB::commit();
 
             return response()->json([
-                'success' => true,
-                'message' => 'Order marked as delivered',
+                'success'  => true,
+                'message'  => 'Order marked as delivered',
                 'order_id' => $order->order_id,
             ]);
         } catch (\Throwable $e) {
             DB::rollBack();
-            Log::error('Delivery.completeOrder error', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            Log::error('Delivery.completeOrder error', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
             return response()->json(['success' => false, 'message' => 'Failed to mark delivered'], 500);
         }
     }
 
     /**
      * POST /api/delivery/verify
-     * Verification by order external id + phone. Also creates transaction + notification.
-     * Payload: { order_id: "ORD-20260206-XXXXXX", phone: "...", delivery_person?: "Name" }
+     * Verify delivery by order ID + phone number.
+     * Creates/updates delivery record, marks order as delivered,
+     * logs transaction, and sends notification.
+     * Payload: { order_id: "ORD-20260206-XXXXXX", phone: "099...", delivery_person?: "Name" }
      */
     public function verify(Request $request)
     {
+        $user = $request->user();
+        $this->ensureDeliveryRole($user); // ✅ internal role check
+
         $data = $request->validate([
-            'order_id' => 'required|string',
-            'phone' => 'required|string',
-            'delivery_person' => 'nullable|string'
+            'order_id'        => 'required|string',
+            'phone'           => 'required|string',
+            'delivery_person' => 'nullable|string',
         ]);
 
-        $order = Order::where('order_id', $data['order_id'])->with('user')->first();
+        $order = Order::where('order_id', $data['order_id'])
+            ->with('user')
+            ->first();
+
         if (! $order) {
             return response()->json(['message' => 'Order not found'], 404);
         }
 
-        // Phone check (simple normalization not implemented — compare raw)
+        // Simple phone match check
         if (($order->user->phone_number ?? '') !== $data['phone']) {
             return response()->json(['message' => 'Phone number does not match customer'], 403);
         }
@@ -134,49 +157,52 @@ class DeliveryController extends Controller
         DB::beginTransaction();
         try {
             // Create or update delivery record
-            $delivery = Delivery::where('order_id', $order->id)->first();
-            if (! $delivery) {
-                $delivery = Delivery::create([
-                    'order_id' => $order->id,
-                    'delivery_person' => $data['delivery_person'] ?? null,
-                    'status' => 'completed',
-                    'verification_code' => null
-                ]);
-            } else {
-                $delivery->update([
-                    'delivery_person' => $data['delivery_person'] ?? $delivery->delivery_person,
-                    'status' => 'completed',
-                    'verification_code' => null
-                ]);
-            }
+            $delivery = Delivery::firstOrNew(['order_id' => $order->id]);
+            $delivery->delivery_person = $data['delivery_person'] ?? $delivery->delivery_person ?? $user->name;
+            $delivery->status = 'completed';
+            $delivery->verification_code = null;
+            $delivery->save();
 
-            // Update order to delivered
+            // Mark order as delivered
             $order->update(['status' => 'delivered']);
 
             // Log transaction
             Transaction::create([
                 'order_id' => $order->id,
-                'type' => 'delivery',
-                'amount' => $order->total,
+                'type'     => 'delivery',
+                'amount'   => $order->total,
                 'currency' => 'MWK',
-                'status' => 'completed',
-                'meta' => json_encode(['delivered_by' => $delivery->delivery_person ?? 'unknown']),
+                'status'   => 'completed',
+                'meta'     => json_encode([
+                    'delivered_by' => $delivery->delivery_person ?? 'unknown'
+                ]),
             ]);
 
-            // Notification to customer
+            // Notify buyer
             Notification::create([
                 'user_id' => $order->user_id,
-                'title' => 'Order Delivered',
+                'title'   => 'Order Delivered',
                 'message' => "Your order #{$order->order_id} has been delivered. Thank you for shopping with Cloudimart.",
             ]);
 
             DB::commit();
 
-            return response()->json(['success' => true, 'message' => 'Delivery confirmed', 'order_id' => $order->order_id]);
+            return response()->json([
+                'success'  => true,
+                'message'  => 'Delivery confirmed',
+                'order_id' => $order->order_id,
+            ]);
         } catch (\Throwable $e) {
             DB::rollBack();
-            Log::error('Delivery.verify error', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
-            return response()->json(['success' => false, 'message' => 'Failed to confirm delivery'], 500);
+            Log::error('Delivery.verify error', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to confirm delivery',
+            ], 500);
         }
     }
 }
+

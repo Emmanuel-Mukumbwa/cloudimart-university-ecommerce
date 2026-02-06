@@ -101,8 +101,9 @@ Route::middleware(['auth:sanctum', 'role:admin'])->group(function () {
 // ============================
 // 🚚 DELIVERY ROUTES
 // ============================
-Route::middleware(['auth:sanctum', 'role:delivery'])->group(function () {
+Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('/delivery/dashboard', [DeliveryController::class, 'dashboard']);
     Route::post('/delivery/orders/{id}/complete', [DeliveryController::class, 'completeOrder']);
-    // Reuse verify endpoint from above or override behavior if needed
 });
+
+

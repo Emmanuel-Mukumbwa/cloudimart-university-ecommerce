@@ -17,7 +17,7 @@ class OrderItem extends Model
     ];
 
     /** Each order item belongs to an order */
-    public function order()
+    public function order() 
     {
         return $this->belongsTo(Order::class);
     }

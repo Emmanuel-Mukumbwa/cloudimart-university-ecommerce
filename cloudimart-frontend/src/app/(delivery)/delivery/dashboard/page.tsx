@@ -1,9 +1,9 @@
-//src/app/(delivery)/dashboard/page.tsx
+//src/app/(delivery)/delivery/dashboard/page.tsx
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import client from '../../../lib/api/client';
-import LoadingSpinner from '../../../components/common/LoadingSpinner';
+import client from '../../../../lib/api/client';
+import LoadingSpinner from '../../../../components/common/LoadingSpinner';
 import { useRouter } from 'next/navigation';
 
 type Product = { id: number; name: string; price: number };
