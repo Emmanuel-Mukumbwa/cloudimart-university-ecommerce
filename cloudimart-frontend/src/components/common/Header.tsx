@@ -39,7 +39,6 @@ export default function Header() {
     const onAuth = () => readUserFromStorage();
     const onStorage = (e: StorageEvent) => {
       if (e.key && e.key.startsWith('user')) readUserFromStorage();
-      // also respond to token changes
       if (e.key === 'auth_token') readUserFromStorage();
     };
 
@@ -109,7 +108,6 @@ export default function Header() {
     } catch {
       // ignore server errors
     } finally {
-      // clear local storage keys (keeps behavior consistent)
       try {
         localStorage.removeItem('auth_token');
         localStorage.removeItem('user');
@@ -119,16 +117,13 @@ export default function Header() {
         localStorage.removeItem('user_role');
       } catch {}
       setUser(null);
-      // notify other windows/components
       window.dispatchEvent(new Event('authChanged'));
-      // redirect to home
       router.push('/');
     }
   };
 
   const goToLogin = () => {
     setShowLoginPrompt(false);
-    // pass redirect as query parameter
     if (loginRedirect) {
       router.push(`/login?redirect=${encodeURIComponent(loginRedirect)}`);
       setLoginRedirect(null);
@@ -149,10 +144,8 @@ export default function Header() {
               className="btn btn-link p-0 text-decoration-none"
               onClick={() => {
                 if (user) {
-                  // go to account/profile page when logged in
                   router.push('/account');
                 } else {
-                  // not logged in -> go to login
                   setLoginRedirect(null);
                   setShowLoginPrompt(true);
                 }
@@ -168,17 +161,19 @@ export default function Header() {
               onClick={() => handleProtected('/orders')}
             >
               <span style={{ color: 'var(--muted)', marginRight: 8 }}>Orders</span>
-              <span
-                className="badge bg-secondary ms-2"
-                style={{
-                  fontWeight: 700,
-                  minWidth: 24,
-                  textAlign: 'center',
-                  borderRadius: 999,
-                }}
-              >
-                {ordersCount}
-              </span>
+              {user && (
+                <span
+                  className="badge bg-secondary ms-2"
+                  style={{
+                    fontWeight: 700,
+                    minWidth: 24,
+                    textAlign: 'center',
+                    borderRadius: 999,
+                  }}
+                >
+                  {ordersCount}
+                </span>
+              )}
             </button>
 
             {/* Support / link */}
@@ -197,14 +192,16 @@ export default function Header() {
       {/* Main header */}
       <header className="site-header" style={{ background: 'var(--brand-orange)', color: '#fff' }}>
         <div className="container d-flex align-items-center justify-content-between py-3">
-          {/* Logo */}
+          {/* Logo: white background to ensure visibility */}
           <Link href="/" className="d-flex align-items-center text-white text-decoration-none">
-            <img
-              src="/cloudimart.png"
-              alt="Cloudimart"
-              className="logo"
-              style={{ height: 40, width: 'auto', objectFit: 'contain', marginRight: 8 }}
-            />
+            <div style={{ background: '#fff', borderRadius: 8, padding: 6, display: 'inline-flex', alignItems: 'center', marginRight: 8 }}>
+              <img
+                src="/cloudimart.png"
+                alt="Cloudimart"
+                className="logo"
+                style={{ height: 40, width: 'auto', objectFit: 'contain' }}
+              />
+            </div>
             <div>
               <div style={{ fontWeight: 800, fontSize: 18 }}>Cloudimart</div>
               <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.92)' }}>Mzuzu University community</div>
@@ -214,7 +211,6 @@ export default function Header() {
           {/* Navigation */}
           <nav className="d-flex align-items-center gap-3">
             <Link href="/" className="text-white text-decoration-none small d-flex align-items-center">
-              {/* home icon */}
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style={{ marginRight: 6 }}>
                 <path d="M3 10.5L12 4l9 6.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1V10.5z" fill="white" />
               </svg>
@@ -225,7 +221,7 @@ export default function Header() {
               Products
             </Link>
 
-            {/* Notifications (left in main nav) */}
+            {/* Notifications */}
             <button
               type="button"
               className="btn btn-link p-0 text-white position-relative d-flex align-items-center small"
@@ -236,7 +232,7 @@ export default function Header() {
                 <path d="M12 24a2.4 2.4 0 0 0 2.4-2.4h-4.8A2.4 2.4 0 0 0 12 24zM18 17v-5c0-3.07-1.63-5.64-4.5-6.32V5a1.5 1.5 0 0 0-3 0v.68C7.63 6.36 6 8.92 6 12v5l-1.29 1.29A1 1 0 0 0 6 20h12a1 1 0 0 0 .71-1.71L18 17z" />
               </svg>
 
-              {notifCount > 0 && (
+              {notifCount > 0 && user && (
                 <span
                   className="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
                   style={{ fontSize: 10 }}
@@ -259,9 +255,11 @@ export default function Header() {
                 <circle cx="18" cy="20" r="1" fill="#1E293B" />
               </svg>
               <span style={{ color: 'var(--brand-darkBlue)', fontWeight: 800, marginRight: 8 }}>Cart</span>
-              <span className="badge bg-secondary ms-2" style={{ fontWeight: 700, minWidth: 28, textAlign: 'center', borderRadius: 999 }} aria-live="polite">
-                {typeof count === 'number' ? count : 0}
-              </span>
+              {user && (
+                <span className="badge bg-secondary ms-2" style={{ fontWeight: 700, minWidth: 28, textAlign: 'center', borderRadius: 999 }} aria-live="polite">
+                  {typeof count === 'number' ? count : 0}
+                </span>
+              )}
             </button>
 
             {/* Auth area (right) */}

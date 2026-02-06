@@ -1,20 +1,26 @@
-// File: cloudimart-frontend/src/components/products/ProductCard.tsx
+// src/components/products/ProductCard.tsx
 'use client';
 
 import React, { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useCart } from '../../context/CartContext';
+import CenteredModal from '../common/CenteredModal';
 
 export default function ProductCard({ product }: { product: any }) {
   const { addToCart } = useCart();
   const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showViewModal, setShowViewModal] = useState(false);
   const [adding, setAdding] = useState(false);
   const [toastVisible, setToastVisible] = useState(false);
 
+  const router = useRouter();
+
   const priceText = typeof product.price === 'number' ? product.price.toFixed(2) : product.price;
 
+  const isLoggedIn = typeof window !== 'undefined' && !!localStorage.getItem('auth_token');
+
   const handleAdd = async () => {
-    // quick local token check to avoid calling server when no token
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
     if (!token) {
       setShowLoginModal(true);
@@ -28,11 +34,31 @@ export default function ProductCard({ product }: { product: any }) {
       setTimeout(() => setToastVisible(false), 2000);
     } catch (err: any) {
       // if unauthorized, prompt login modal
-      if (err.message === 'unauthorized') {
-        setShowLoginModal(true);
-        return;
-      }
-      alert(err.message || 'Failed to add to cart');
+      setShowLoginModal(true);
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const openView = () => setShowViewModal(true);
+
+  const handleViewAdd = async () => {
+    // Add to cart from modal (same protection)
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    if (!token) {
+      setShowViewModal(false);
+      setShowLoginModal(true);
+      return;
+    }
+
+    try {
+      setAdding(true);
+      await addToCart(product.id, 1);
+      setShowViewModal(false);
+      setToastVisible(true);
+      setTimeout(() => setToastVisible(false), 2000);
+    } catch (err: any) {
+      setShowLoginModal(true);
     } finally {
       setAdding(false);
     }
@@ -41,7 +67,7 @@ export default function ProductCard({ product }: { product: any }) {
   return (
     <>
       <article className="product-card">
-        <div className="media">
+        <div className="media" style={{ cursor: 'pointer' }} onClick={openView}>
           <img
             src={product.image_url || '/images/placeholder.png'}
             alt={product.name}
@@ -59,9 +85,9 @@ export default function ProductCard({ product }: { product: any }) {
         </div>
 
         <div className="card-footer mt-3 d-flex justify-content-between">
-          <Link href={`/products/${product.id}`} className="btn btn-outline-secondary btn-sm">
+          <button className="btn btn-outline-secondary btn-sm" onClick={openView}>
             View
-          </Link>
+          </button>
 
           <button
             className="btn-add"
@@ -74,29 +100,51 @@ export default function ProductCard({ product }: { product: any }) {
         </div>
       </article>
 
-      {/* Not-logged-in modal */}
-      {showLoginModal && (
-        <div
-          className="modal fade show"
-          tabIndex={-1}
-          style={{ display: 'block', backgroundColor: 'rgba(0,0,0,0.5)' }}
-        >
-          <div className="modal-dialog modal-dialog-centered">
-            <div className="modal-content">
-              <div className="modal-header bg-warning">
-                <h5 className="modal-title text-dark">Login required</h5>
-                <button type="button" className="btn-close" onClick={() => setShowLoginModal(false)} />
+      {/* View / Quick preview modal (re-uses CenteredModal) */}
+      <CenteredModal
+        show={showViewModal}
+        title={product.name}
+        body={
+          <div className="container-fluid">
+            <div className="row gx-3">
+              <div className="col-12 col-md-6 text-center">
+                <img
+                  src={product.image_url || '/images/placeholder.png'}
+                  alt={product.name}
+                  className="img-fluid rounded mb-3"
+                  style={{ maxHeight: 260, objectFit: 'contain' }}
+                />
               </div>
-              <div className="modal-body">
-                <p>Please log in to add items to your cart.</p>
-              </div>
-              <div className="modal-footer">
-                <Link href="/login" className="btn btn-warning w-100">Go to login</Link>
+              <div className="col-12 col-md-6">
+                <p className="text-muted">{product.description}</p>
+                <div className="mt-3">
+                  <div className="h4 fw-bold">MK {priceText}</div>
+                  <div className="text-sm text-muted">Stock: {product.stock}</div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        }
+        onClose={handleViewAdd}
+        onCancel={() => setShowViewModal(false)}
+        okLabel={adding ? 'Adding...' : 'Add to cart'}
+        cancelLabel="Close"
+      />
+
+      {/* Not-logged-in prompt (re-uses CenteredModal) */}
+      <CenteredModal
+        show={showLoginModal}
+        title="Login required"
+        body="Please sign in to add items to your cart or view protected pages. Would you like to sign in now?"
+        onClose={() => {
+          // navigate to login; preserve redirect to product page
+          const redirect = `/products/${product.id}`;
+          router.push(`/login?redirect=${encodeURIComponent(redirect)}`);
+        }}
+        onCancel={() => setShowLoginModal(false)}
+        okLabel="Sign in"
+        cancelLabel="Cancel"
+      />
 
       {/* Simple toast for success */}
       {toastVisible && (
