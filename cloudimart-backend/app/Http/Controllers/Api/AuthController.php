@@ -45,7 +45,7 @@ class AuthController extends Controller
                     (float) $request->longitude
                 );
 
-                // You can optionally refine this to verify against the selected location polygon only
+                // Optionally refine to match selected location polygon only
                 $location_verified = $matches;
             }
 
@@ -60,18 +60,19 @@ class AuthController extends Controller
                     'latitude'             => $request->latitude,
                     'longitude'            => $request->longitude,
                     'location_verified_at' => $location_verified ? now() : null,
+                    // role will default to 'user' if migration sets default; otherwise set explicitly here
                 ]);
             });
 
             $token = $user->createToken('auth_token')->plainTextToken;
 
             return response()->json([
-                'success'        => true,
-                'message'        => 'User registered successfully',
-                'user'           => $user,
-                'access_token'   => $token,
-                'token_type'     => 'Bearer',
-                'location_status'=> $user->location_verified_at ? 'verified' : 'unverified',
+                'success'         => true,
+                'message'         => 'User registered successfully',
+                'user'            => $user,
+                'access_token'    => $token,
+                'token_type'      => 'Bearer',
+                'location_status' => $user->location_verified_at ? 'verified' : 'unverified',
             ], 201);
         } catch (\Throwable $e) {
             Log::error('User registration failed', [
@@ -107,12 +108,12 @@ class AuthController extends Controller
         $token = $user->createToken('auth_token')->plainTextToken;
 
         return response()->json([
-            'success'        => true,
-            'message'        => 'Login successful',
-            'user'           => $user,
-            'access_token'   => $token,
-            'token_type'     => 'Bearer',
-            'location_status'=> $user->location_verified_at ? 'verified' : 'unverified',
+            'success'         => true,
+            'message'         => 'Login successful',
+            'user'            => $user,
+            'access_token'    => $token,
+            'token_type'      => 'Bearer',
+            'location_status' => $user->location_verified_at ? 'verified' : 'unverified',
         ]);
     }
 }
