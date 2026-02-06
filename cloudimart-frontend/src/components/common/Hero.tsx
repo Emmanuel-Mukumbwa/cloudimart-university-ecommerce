@@ -3,6 +3,7 @@
 
 import React from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 
 export default function Hero() {
   return (
@@ -43,13 +44,26 @@ export default function Hero() {
 
           {/* RIGHT */}
           <div className="col-lg-6 text-center mt-5 mt-lg-0">
-            <div className="position-relative d-inline-block">
-              <img
-                src="/file.svg"
-                alt="Cloudimart illustration"
-                className="img-fluid rounded-4 shadow-lg"
-                style={{ maxWidth: '400px' }}
+            <div className="position-relative d-inline-block" style={{ maxWidth: 400 }}>
+              <Image
+                src="/cloudimart.png"
+                alt="Cloudimart storefront preview"
+                width={2982}
+                height={1010}
+                className="rounded-4 shadow-lg"
+                style={{ width: '100%', height: 'auto' }}
+                priority={false}
+                placeholder="empty"
+                onError={(e: any) => {
+                  // fall back to the existing svg if something goes wrong
+                  const target = e?.target as HTMLImageElement | null;
+                  if (target) {
+                    target.onerror = null;
+                    target.src = '/file.svg';
+                  }
+                }}
               />
+
               <div
                 className="position-absolute top-0 start-0 w-100 h-100 rounded-4"
                 style={{
@@ -57,7 +71,7 @@ export default function Hero() {
                   filter: 'blur(40px)',
                   zIndex: -1,
                 }}
-              ></div>
+              />
             </div>
           </div>
         </div>
