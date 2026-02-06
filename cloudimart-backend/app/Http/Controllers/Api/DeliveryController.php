@@ -16,14 +16,19 @@ class DeliveryController extends Controller
     /**
      * GET /api/delivery/dashboard
      * Returns list of active (not delivered) orders for delivery personnel.
+     * This will include orders with status 'pending' and 'pending_delivery'.
      */
     public function dashboard(Request $request)
     {
         $user = $request->user();
 
-        // For now return all non-delivered orders; in future we can filter by assigned delivery person.
+        // Return all orders where status is not 'delivered'. Includes pending_delivery.
         $orders = Order::where('status', '!=', 'delivered')
-            ->with(['user:id,name,phone_number', 'orderItems.product:id,name,price'])
+            ->with([
+                'user:id,name,phone_number',
+                // ensure relation name matches your Order model method (orderItems)
+                'orderItems.product:id,name,price'
+            ])
             ->orderBy('created_at', 'asc')
             ->get();
 
@@ -33,6 +38,7 @@ class DeliveryController extends Controller
     /**
      * POST /api/delivery/orders/{id}/complete
      * Mark order as delivered (by DB id).
+     * Idempotent: safe to call multiple times.
      */
     public function completeOrder(Request $request, $id)
     {
@@ -68,7 +74,7 @@ class DeliveryController extends Controller
                 ]);
             }
 
-            // Update order status
+            // Update order status to delivered
             $order->update(['status' => 'delivered']);
 
             // Create transaction record (log)
@@ -104,7 +110,7 @@ class DeliveryController extends Controller
 
     /**
      * POST /api/delivery/verify
-     * Existing verification via order external id + phone. We'll also create transaction + notification here.
+     * Verification by order external id + phone. Also creates transaction + notification.
      * Payload: { order_id: "ORD-20260206-XXXXXX", phone: "...", delivery_person?: "Name" }
      */
     public function verify(Request $request)
@@ -144,7 +150,7 @@ class DeliveryController extends Controller
                 ]);
             }
 
-            // Update order
+            // Update order to delivered
             $order->update(['status' => 'delivered']);
 
             // Log transaction
