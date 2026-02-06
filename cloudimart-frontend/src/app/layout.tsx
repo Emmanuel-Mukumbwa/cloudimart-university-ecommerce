@@ -1,4 +1,5 @@
 // File: src/app/layout.tsx
+// File: src/app/layout.tsx
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './globals.css';
 import React from 'react';
@@ -9,21 +10,23 @@ import CartProvider from '../context/CartContext';
 
 export const metadata = {
   title: 'Cloudimart',
-  description: 'University e-commerce prototype', 
+  description: 'Mzuzu University Community Store',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="min-h-screen flex flex-col bg-gray-50 text-slate-900">
+      <body className="app-root min-h-screen flex flex-col bg-gray-50 text-slate-900">
         <ReactQueryProvider>
           <CartProvider>
-          <Header />
-          <main className="flex-1">{children}</main>
-          <Footer />
+            <Header />
+            <main className="app-main flex-1 container py-4" role="main">
+              {children}
+            </main>
+            <Footer />
           </CartProvider>
-        </ReactQueryProvider> 
-      </body> 
+        </ReactQueryProvider>
+      </body>
     </html>
   );
 }
