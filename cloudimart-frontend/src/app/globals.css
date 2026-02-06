@@ -308,3 +308,29 @@ input:focus, select:focus {
    Minor fixes for bootstrap removal of tailwind
    ------------------------- */
 .btn { border-radius: 999px; } /* rounded pills by default */
+
+/* Ensure the app root and main stretch to full viewport height */
+:root, html, body, #__next {
+  height: 100%;
+}
+
+/* App root flex column so footer can sit at the bottom */
+.app-root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* main expands to take available space */
+.app-main {
+  flex: 1 0 auto;
+  padding-top: 1.5rem;
+  padding-bottom: 1.5rem;
+}
+
+/* Footer stays at bottom; mt-auto on footer plus the flex container ensures sticky footer */
+.site-footer {
+  background: #f8f9fa;
+  padding: 0.75rem 0;
+}
+

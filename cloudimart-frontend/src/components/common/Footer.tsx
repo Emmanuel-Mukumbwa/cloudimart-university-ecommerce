@@ -6,5 +6,5 @@ export default function Footer() {
         © {new Date().getFullYear()} Cloudimart — Mzuzu University Community Store
       </div>
     </footer>
-  );
+  ); 
 }

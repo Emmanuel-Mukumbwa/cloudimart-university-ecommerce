@@ -9,7 +9,7 @@ import CartProvider from '../context/CartContext';
 
 export const metadata = {
   title: 'Cloudimart',
-  description: 'University e-commerce prototype',
+  description: 'University e-commerce prototype', 
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
