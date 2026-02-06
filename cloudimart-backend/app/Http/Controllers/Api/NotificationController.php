@@ -25,4 +25,13 @@ class NotificationController extends Controller
         $notif->update(['is_read' => true]);
         return response()->json(['success' => true]);
     }
+
+    public function unreadCount(Request $request)
+    {
+        $count = Notification::where('user_id', $request->user()->id)
+            ->where('is_read', false)
+            ->count();
+
+        return response()->json(['count' => $count]);
+    }
 }

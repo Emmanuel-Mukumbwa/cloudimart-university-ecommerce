@@ -19,7 +19,12 @@ class OrdersController extends Controller
     public function count(Request $request)
     {
         $user = $request->user();
-        $count = Order::where('user_id', $user->id)->whereIn('status', ['pending', 'delivered', 'completed'])->count();
+
+        // Count orders that are NOT delivered. Adjust statuses if you add new states later.
+        $count = Order::where('user_id', $user->id)
+                      ->where('status', '!=', 'delivered')
+                      ->count();
+
         return response()->json(['count' => $count]);
     }
 }

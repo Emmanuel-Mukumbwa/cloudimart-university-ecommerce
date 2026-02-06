@@ -85,7 +85,11 @@ Route::middleware('auth:sanctum')->group(function () {
     // --- 🔔 Notifications (in-app) --- //
     Route::get('/notifications', [NotificationController::class, 'index']);
     Route::post('/notifications/{id}/read', [NotificationController::class, 'markRead']);
+    // --- Unread notifications count (for badge) --- //
+    Route::get('/notifications/unread-count', [NotificationController::class, 'unreadCount']);
+
 
     // --- 🚚 Delivery Verification --- //
     Route::post('/delivery/verify', [DeliveryController::class, 'verify']);
+
 });
