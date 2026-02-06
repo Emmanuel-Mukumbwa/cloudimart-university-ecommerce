@@ -16,6 +16,7 @@ export default function LoginPage() {
 
   const router = useRouter();
 
+  // ✅ Robust token and user handling
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -24,16 +25,28 @@ export default function LoginPage() {
     try {
       // ✅ Send login request to API
       const res = await client.post('/api/auth/login', { email, password });
-      const { token, user, redirect_url } = res.data;
+
+      // ✅ Backend may return different token key names
+      const token =
+        res.data?.token ??
+        res.data?.access_token ??
+        res.data?.accessToken ??
+        res.data?.data?.token ??
+        null;
+
+      const user = res.data?.user ?? res.data?.data?.user ?? null;
+      const redirect_url = res.data?.redirect_url ?? '/';
 
       // ✅ Store authentication details in localStorage
       if (typeof window !== 'undefined') {
-        localStorage.setItem('auth_token', token);
-        localStorage.setItem('user', JSON.stringify(user));
-        localStorage.setItem('user_id', user.id);
-        localStorage.setItem('user_name', user.name);
-        localStorage.setItem('user_email', user.email);
-        localStorage.setItem('user_role', user.role);
+        if (token) localStorage.setItem('auth_token', token);
+        if (user) {
+          localStorage.setItem('user', JSON.stringify(user));
+          localStorage.setItem('user_id', String(user.id));
+          localStorage.setItem('user_name', user.name);
+          localStorage.setItem('user_email', user.email);
+          localStorage.setItem('user_role', user.role);
+        }
       }
 
       // Save redirect URL to navigate after modal confirmation
@@ -41,7 +54,11 @@ export default function LoginPage() {
       setShowModal(true);
     } catch (err: any) {
       console.error(err);
-      setError(err?.response?.data?.message || err?.userMessage || 'Login failed. Check your credentials.');
+      setError(
+        err?.response?.data?.message ||
+          err?.userMessage ||
+          'Login failed. Check your credentials.'
+      );
     } finally {
       setLoading(false);
     }
@@ -120,9 +137,7 @@ export default function LoginPage() {
                 <p>
                   Welcome back to <strong>Cloudimart</strong>!
                 </p>
-                <p>
-                  You’ll be redirected to your dashboard shortly.
-                </p>
+                <p>You’ll be redirected to your dashboard shortly.</p>
               </div>
               <div className="modal-footer">
                 <button

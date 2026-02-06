@@ -3,8 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\User;
 use Illuminate\Http\Request;
+use App\Models\User;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\DB;
@@ -60,18 +60,20 @@ class AuthController extends Controller
                     'latitude'             => $request->latitude,
                     'longitude'            => $request->longitude,
                     'location_verified_at' => $location_verified ? now() : null,
-                    // role will default to 'user' if migration sets default; otherwise set explicitly here
+                    'role'                 => 'user', // ensure default role
                 ]);
             });
 
-            $token = $user->createToken('auth_token')->plainTextToken;
+            // create token
+            $token = $user->createToken('api-token')->plainTextToken;
 
             return response()->json([
                 'success'         => true,
                 'message'         => 'User registered successfully',
                 'user'            => $user,
-                'access_token'    => $token,
+                'token'           => $token,
                 'token_type'      => 'Bearer',
+                'redirect_url'    => $this->redirectForRole($user->role),
                 'location_status' => $user->location_verified_at ? 'verified' : 'unverified',
             ], 201);
         } catch (\Throwable $e) {
@@ -105,15 +107,48 @@ class AuthController extends Controller
             ]);
         }
 
-        $token = $user->createToken('auth_token')->plainTextToken;
+        // revoke previous tokens optionally (uncomment if you want only single-session)
+        // $user->tokens()->delete();
+
+        $token = $user->createToken('api-token')->plainTextToken;
 
         return response()->json([
             'success'         => true,
             'message'         => 'Login successful',
             'user'            => $user,
-            'access_token'    => $token,
+            'token'           => $token,
             'token_type'      => 'Bearer',
+            'redirect_url'    => $this->redirectForRole($user->role),
             'location_status' => $user->location_verified_at ? 'verified' : 'unverified',
         ]);
+    }
+
+    /**
+     * Logout (revoke current token)
+     */
+    public function logout(Request $request)
+    {
+        try {
+            $user = $request->user();
+            if ($user && $request->user()->currentAccessToken()) {
+                $request->user()->currentAccessToken()->delete();
+            }
+            return response()->json(['success' => true, 'message' => 'Logged out']);
+        } catch (\Throwable $e) {
+            Log::error('Logout error', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Failed to logout'], 500);
+        }
+    }
+
+    /**
+     * Map role to a frontend path
+     */
+    protected function redirectForRole(string $role): string
+    {
+        return match ($role) {
+            'admin' => '/admin/dashboard',
+            'delivery' => '/delivery/dashboard',
+            default => '/', // normal user -> home
+        };
     }
 }
