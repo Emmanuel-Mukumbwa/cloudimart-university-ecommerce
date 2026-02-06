@@ -13,7 +13,6 @@ export default function FeaturedProducts() {
   const [category, setCategory] = useState<string>('');
   const [categories, setCategories] = useState<{ id: number; name: string; slug?: string }[]>([]);
 
-  // featured: per_page 6; pass category so products update
   const { data, isLoading, isError } = useProducts({ page: 1, per_page: 6, category });
 
   useEffect(() => {
@@ -24,9 +23,7 @@ export default function FeaturedProducts() {
         const payload = res.data?.data ?? res.data?.categories ?? res.data;
         setCategories(Array.isArray(payload) ? payload : []);
       })
-      .catch(() => {
-        // silent fallback
-      });
+      .catch(() => {});
     return () => { mounted = false; };
   }, []);
 
@@ -58,7 +55,10 @@ export default function FeaturedProducts() {
         <div className="bg-white rounded p-4 shadow-sm">
           <div className="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between mb-3 gap-3">
             <div>
-              <h2 className="h4 mb-1">Featured products</h2>
+              <h2 className="h4 mb-1">
+                <span style={{ color: '#07122a' }}>Featured</span>{' '}
+                <span style={{ color: 'var(--brand-darkBlue)' }}>products</span>
+              </h2>
               <p className="small text-muted mb-0">
                 Top Stationery & Dairy picks for the Mzuzu University community and nearby neighborhoods
               </p>
@@ -74,7 +74,7 @@ export default function FeaturedProducts() {
             {products.map((p: any) => (
               <ProductCard key={p.id} product={p} />
             ))}
-          </div> 
+          </div>
         </div>
       </div>
     </section>

@@ -1,4 +1,4 @@
-//src/app/(store)/products/page.tsx
+// src/app/(store)/products/page.tsx
 'use client';
 import React, { useEffect, useState } from 'react';
 import { useProducts } from '../../../lib/hooks/useProducts';
@@ -14,12 +14,12 @@ export default function ProductsPage() {
 
   const { data, isLoading, isError } = useProducts({ page, per_page: 12, q, category });
 
-  useEffect(() => { 
+  useEffect(() => {
     let mounted = true;
     client.get('/api/categories')
       .then((res) => {
         if (!mounted) return;
-        setCategories(res.data.data ?? res.data.categories ?? res.data);
+        setCategories(res.data.data ?? res.data.categories ?? res.data ?? []);
       })
       .catch(() => {});
     return () => { mounted = false; };
@@ -34,12 +34,22 @@ export default function ProductsPage() {
 
   return (
     <div className="container py-5">
+      <div className="mb-4">
+        {/* Two-tone page title: black + brand blue */}
+        <h1 className="mb-1" style={{ fontSize: '1.5rem', fontWeight: 800 }}>
+          <span style={{ color: '#07122a' }}>Our</span>{' '}
+          <span style={{ color: 'var(--brand-darkBlue)' }}>Products</span>
+        </h1>
+        <p className="text-muted small">Browse stationery & dairy items curated for Mzuzu University community.</p>
+      </div>
+
       <div className="bg-white rounded shadow-sm p-4 mb-4">
         <div className="row g-3 align-items-center mb-3">
-          <div className="col-md-4">
+          <div className="col-md-8">
             <CategoryFilter categories={categories} value={category} onChange={setCategory} />
           </div>
-          <div className="col-md-4 ms-auto">
+
+          <div className="col-md-4">
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}

@@ -11,14 +11,12 @@ export default function ProductCard({ product }: { product: any }) {
   const { addToCart } = useCart();
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showViewModal, setShowViewModal] = useState(false);
+  const [showAddedModal, setShowAddedModal] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [toastVisible, setToastVisible] = useState(false);
 
   const router = useRouter();
 
   const priceText = typeof product.price === 'number' ? product.price.toFixed(2) : product.price;
-
-  const isLoggedIn = typeof window !== 'undefined' && !!localStorage.getItem('auth_token');
 
   const handleAdd = async () => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
@@ -30,10 +28,9 @@ export default function ProductCard({ product }: { product: any }) {
     try {
       setAdding(true);
       await addToCart(product.id, 1);
-      setToastVisible(true);
-      setTimeout(() => setToastVisible(false), 2000);
+      setShowAddedModal(true);
     } catch (err: any) {
-      // if unauthorized, prompt login modal
+      // If unauthorized or any failure, show login modal
       setShowLoginModal(true);
     } finally {
       setAdding(false);
@@ -43,7 +40,6 @@ export default function ProductCard({ product }: { product: any }) {
   const openView = () => setShowViewModal(true);
 
   const handleViewAdd = async () => {
-    // Add to cart from modal (same protection)
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
     if (!token) {
       setShowViewModal(false);
@@ -55,8 +51,7 @@ export default function ProductCard({ product }: { product: any }) {
       setAdding(true);
       await addToCart(product.id, 1);
       setShowViewModal(false);
-      setToastVisible(true);
-      setTimeout(() => setToastVisible(false), 2000);
+      setShowAddedModal(true);
     } catch (err: any) {
       setShowLoginModal(true);
     } finally {
@@ -146,16 +141,31 @@ export default function ProductCard({ product }: { product: any }) {
         cancelLabel="Cancel"
       />
 
-      {/* Simple toast for success */}
-      {toastVisible && (
-        <div style={{
-          position: 'fixed', bottom: 20, right: 20, zIndex: 2000,
-          background: 'var(--brand-orange)', color: '#fff', padding: '10px 16px',
-          borderRadius: 8, boxShadow: '0 6px 20px rgba(0,0,0,0.12)'
-        }}>
-          Added to cart
-        </div>
-      )}
+      {/* Added to cart confirmation (re-uses CenteredModal) */}
+      <CenteredModal
+        show={showAddedModal}
+        title="Added to cart"
+        body={
+          <div className="text-center">
+            <img
+              src={product.image_url || '/images/placeholder.png'}
+              alt={product.name}
+              className="img-fluid rounded mb-2"
+              style={{ maxHeight: 140, objectFit: 'contain' }}
+            />
+            <div className="fw-semibold mb-1">{product.name}</div>
+            <div className="text-muted">MK {priceText} — added to your cart.</div>
+          </div>
+        }
+        onClose={() => {
+          // View cart
+          setShowAddedModal(false);
+          router.push('/cart');
+        }}
+        onCancel={() => setShowAddedModal(false)}
+        okLabel="View cart"
+        cancelLabel="Continue shopping"
+      />
     </>
   );
 }
