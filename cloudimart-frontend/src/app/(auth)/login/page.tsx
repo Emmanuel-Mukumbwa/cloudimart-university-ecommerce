@@ -1,10 +1,11 @@
-// File: cloudimart-frontend/src/app/%28auth%29/login/page.tsx
+// src/app/(auth)/login/page.tsx
 'use client';
 
 import React, { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import client from '../../../lib/api/client';
 import LoadingSpinner from '../../../components/common/LoadingSpinner';
+import CenteredModal from '../../../components/common/CenteredModal';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -15,18 +16,17 @@ export default function LoginPage() {
   const [redirectUrl, setRedirectUrl] = useState<string | null>(null);
 
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectQuery = searchParams?.get('redirect') ?? '/';
 
-  // ✅ Robust token and user handling
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
 
     try {
-      // ✅ Send login request to API
       const res = await client.post('/api/auth/login', { email, password });
 
-      // ✅ Backend may return different token key names
       const token =
         res.data?.token ??
         res.data?.access_token ??
@@ -35,9 +35,9 @@ export default function LoginPage() {
         null;
 
       const user = res.data?.user ?? res.data?.data?.user ?? null;
-      const redirect_url = res.data?.redirect_url ?? '/';
+      const redirect_url = res.data?.redirect_url ?? redirectQuery ?? '/';
 
-      // ✅ Store authentication details in localStorage
+      // Save to localStorage
       if (typeof window !== 'undefined') {
         if (token) localStorage.setItem('auth_token', token);
         if (user) {
@@ -45,20 +45,19 @@ export default function LoginPage() {
           localStorage.setItem('user_id', String(user.id));
           localStorage.setItem('user_name', user.name);
           localStorage.setItem('user_email', user.email);
-          localStorage.setItem('user_role', user.role);
+          localStorage.setItem('user_role', user.role ?? '');
         }
       }
 
-      // Save redirect URL to navigate after modal confirmation
+      // Inform other windows/components
+      window.dispatchEvent(new Event('authChanged'));
+
+      // Save redirect, show success modal
       setRedirectUrl(redirect_url || '/');
       setShowModal(true);
     } catch (err: any) {
       console.error(err);
-      setError(
-        err?.response?.data?.message ||
-          err?.userMessage ||
-          'Login failed. Check your credentials.'
-      );
+      setError(err?.response?.data?.message || err?.userMessage || 'Login failed. Check your credentials.');
     } finally {
       setLoading(false);
     }
@@ -102,55 +101,45 @@ export default function LoginPage() {
                   />
                 </div>
 
-                <button
-                  type="submit"
-                  className="btn btn-primary w-100"
-                  disabled={loading}
-                >
-                  {loading ? <LoadingSpinner /> : 'Login'}
+                <button type="submit" className="btn btn-primary w-100" disabled={loading}>
+                  {loading ? (
+                    // small spinner inline for button
+                    <span className="d-inline-flex align-items-center gap-2">
+                      <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true" />
+                      Signing in...
+                    </span>
+                  ) : (
+                    'Login'
+                  )}
                 </button>
               </form>
+
+              <div className="text-center mt-3">
+                <p className="small mb-0">
+                  Don't have an account?{' '}
+                  <a href="/register" className="fw-semibold">
+                    Register
+                  </a>
+                </p>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* ✅ Success Modal */}
-      {showModal && (
-        <div
-          className="modal fade show"
-          tabIndex={-1}
-          role="dialog"
-          style={{ display: 'block', backgroundColor: 'rgba(0,0,0,0.6)' }}
-        >
-          <div className="modal-dialog modal-dialog-centered" role="document">
-            <div className="modal-content">
-              <div className="modal-header bg-success text-white">
-                <h5 className="modal-title">Login Successful</h5>
-                <button
-                  type="button"
-                  className="btn-close"
-                  onClick={handleModalOk}
-                ></button>
-              </div>
-              <div className="modal-body text-center">
-                <p>
-                  Welcome back to <strong>Cloudimart</strong>!
-                </p>
-                <p>You’ll be redirected to your dashboard shortly.</p>
-              </div>
-              <div className="modal-footer">
-                <button
-                  className="btn btn-success w-100"
-                  onClick={handleModalOk}
-                >
-                  Continue
-                </button>
-              </div>
-            </div>
+      {/* Success modal (re-using CenteredModal) */}
+      <CenteredModal
+        show={showModal}
+        title="Login Successful"
+        body={
+          <div className="text-center">
+            <p>Welcome back to <strong>Cloudimart</strong>!</p>
+            <p>You’ll be redirected shortly.</p>
           </div>
-        </div>
-      )}
+        }
+        onClose={handleModalOk}
+        okLabel="Continue"
+      />
     </div>
   );
 }
