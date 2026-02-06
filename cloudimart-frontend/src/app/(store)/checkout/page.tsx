@@ -198,7 +198,7 @@ export default function CheckoutPage() {
       }
     };
 
-    const options: PositionOptions = { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 };
+    const options: PositionOptions = { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 };
 
     try {
       navigator.geolocation.getCurrentPosition(success, errorCb, options);
