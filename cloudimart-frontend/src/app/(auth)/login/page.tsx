@@ -1,8 +1,9 @@
 // File: cloudimart-frontend/src/app/%28auth%29/login/page.tsx
 'use client';
-import { useState } from 'react';
-import axios from 'axios';
+
+import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import client from '../../../lib/api/client';
 import LoadingSpinner from '../../../components/common/LoadingSpinner';
 
 export default function LoginPage() {
@@ -11,29 +12,36 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
+  const [redirectUrl, setRedirectUrl] = useState<string | null>(null);
 
   const router = useRouter();
-  const API = process.env.NEXT_PUBLIC_API_URL || '';
 
-  const onSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
 
     try {
-      const url = API ? `${API}/api/auth/login` : '/api/auth/login';
-      const res = await axios.post(url, { email, password });
+      // ✅ Send login request to API
+      const res = await client.post('/api/auth/login', { email, password });
+      const { token, user, redirect_url } = res.data;
 
-      // ✅ Store user + token in localStorage
-      localStorage.setItem('auth_token', res.data.access_token);
-      localStorage.setItem('user', JSON.stringify(res.data.user));
-      localStorage.setItem('user_id', res.data.user.id);
-      localStorage.setItem('user_name', res.data.user.name);
-      localStorage.setItem('user_email', res.data.user.email);
+      // ✅ Store authentication details in localStorage
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('auth_token', token);
+        localStorage.setItem('user', JSON.stringify(user));
+        localStorage.setItem('user_id', user.id);
+        localStorage.setItem('user_name', user.name);
+        localStorage.setItem('user_email', user.email);
+        localStorage.setItem('user_role', user.role);
+      }
 
-      setShowModal(true); // show modal on success
+      // Save redirect URL to navigate after modal confirmation
+      setRedirectUrl(redirect_url || '/');
+      setShowModal(true);
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Login failed. Check your credentials.');
+      console.error(err);
+      setError(err?.response?.data?.message || err?.userMessage || 'Login failed. Check your credentials.');
     } finally {
       setLoading(false);
     }
@@ -41,7 +49,7 @@ export default function LoginPage() {
 
   const handleModalOk = () => {
     setShowModal(false);
-    router.push('/'); // redirect to home
+    router.push(redirectUrl || '/');
   };
 
   return (
@@ -50,29 +58,29 @@ export default function LoginPage() {
         <div className="col-md-5">
           <div className="card shadow-sm border-0">
             <div className="card-body">
-              <h3 className="mb-4 text-center">Login</h3>
+              <h3 className="mb-4 text-center fw-bold">Login</h3>
 
               {error && <div className="alert alert-danger">{error}</div>}
 
-              <form onSubmit={onSubmit}>
+              <form onSubmit={handleSubmit}>
                 <div className="mb-3">
                   <input
+                    type="email"
+                    className="form-control"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="Email"
-                    type="email"
-                    className="form-control"
                     required
                   />
                 </div>
 
                 <div className="mb-4">
                   <input
+                    type="password"
+                    className="form-control"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="Password"
-                    type="password"
-                    className="form-control"
                     required
                   />
                 </div>
@@ -109,15 +117,19 @@ export default function LoginPage() {
                 ></button>
               </div>
               <div className="modal-body text-center">
-                <p>Welcome back to <strong>Cloudimart</strong>!</p>
-                <p>You can now browse products and add items to your cart.</p>
+                <p>
+                  Welcome back to <strong>Cloudimart</strong>!
+                </p>
+                <p>
+                  You’ll be redirected to your dashboard shortly.
+                </p>
               </div>
               <div className="modal-footer">
                 <button
                   className="btn btn-success w-100"
                   onClick={handleModalOk}
                 >
-                  Continue to Home
+                  Continue
                 </button>
               </div>
             </div>
