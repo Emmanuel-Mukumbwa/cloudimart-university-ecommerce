@@ -124,8 +124,7 @@ class CheckoutController extends Controller
             'user_id' => $user->id,
             'total' => $total,
             'delivery_address' => $data['delivery_address'],
-            // MUST use valid enum value - use 'completed' to indicate paid + created
-            'status' => 'completed',
+             'status' => 'pending_delivery',
             'payment_ref' => $payment->tx_ref,
         ]);
 
