@@ -6,18 +6,29 @@ import Link from 'next/link';
 import Image from 'next/image';
 
 export default function Hero() {
+  const handleScrollToProducts = (e?: React.MouseEvent) => {
+    e?.preventDefault();
+    const el = document.getElementById('products');
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    else {
+      // fallback: navigate to /products if #products not present
+      window.location.href = '/products';
+    }
+  };
+
   return (
     <section className="bg-light py-5">
       <div className="container py-lg-5">
         <div className="row align-items-center">
           {/* LEFT */}
           <div className="col-lg-6 text-center text-lg-start">
-            <span className="badge bg-primary-subtle text-primary mb-3">
+            <span className="badge bg-primary-subtle mb-3" style={{ color: 'var(--brand-darkBlue)' }}>
               Cloudimart · Mzuzu University Community
             </span>
 
-            <h1 className="display-5 fw-bold mb-3 text-dark">
-              One store for the <span className="text-primary">entire community</span>
+            <h1 className="display-5 fw-bold mb-3" style={{ color: '#07122a' }}>
+              One store for the{' '}
+              <span style={{ color: 'var(--brand-darkBlue)' }}>entire community</span>
             </h1>
 
             <p className="lead text-secondary mb-4">
@@ -30,9 +41,16 @@ export default function Hero() {
               <Link href="/products" className="btn btn-lg btn-warning text-white fw-semibold shadow-sm">
                 Shop Now
               </Link>
-              <Link href="/products" className="btn btn-lg btn-outline-warning fw-semibold">
+
+              {/* View Catalog: smooth-scroll to #products (fallback to /products) */}
+              <a
+                href="#products"
+                onClick={handleScrollToProducts}
+                className="btn btn-lg btn-outline-warning fw-semibold"
+                style={{ borderColor: 'var(--brand-orange)', color: 'var(--brand-orange)' }}
+              >
                 View Catalog
-              </Link>
+              </a>
             </div>
 
             <ul className="list-inline mt-4 small text-secondary">

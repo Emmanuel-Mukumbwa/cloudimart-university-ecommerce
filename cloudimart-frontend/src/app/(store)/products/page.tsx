@@ -14,6 +14,7 @@ export default function ProductsPage() {
 
   const { data, isLoading, isError } = useProducts({ page, per_page: 12, q, category });
 
+  // load categories once
   useEffect(() => {
     let mounted = true;
     client.get('/api/categories')
@@ -21,16 +22,78 @@ export default function ProductsPage() {
         if (!mounted) return;
         setCategories(res.data.data ?? res.data.categories ?? res.data ?? []);
       })
-      .catch(() => {});
+      .catch(() => {})
     return () => { mounted = false; };
   }, []);
 
+  // reset page when filters/search change
   useEffect(() => setPage(1), [category, q]);
 
+  // Defensive helper: extract pagination meta from varying API shapes
+  function extractMeta(raw: any) {
+    const metaFrom =
+      raw?.meta ??
+      raw?.data?.meta ??
+      (raw && typeof raw === 'object' && ('current_page' in raw || 'last_page' in raw) ? raw : null) ??
+      null;
+
+    const current_page =
+      metaFrom?.current_page ??
+      metaFrom?.page ??
+      raw?.current_page ??
+      raw?.page ??
+      1;
+
+    const per_page =
+      metaFrom?.per_page ??
+      metaFrom?.perPage ??
+      raw?.per_page ??
+      raw?.perPage ??
+      12;
+
+    const total =
+      metaFrom?.total ??
+      metaFrom?.count ??
+      raw?.total ??
+      (Array.isArray(raw?.data) ? raw.data.length : undefined) ??
+      (Array.isArray(raw) ? raw.length : undefined) ??
+      0;
+
+    let last_page =
+      metaFrom?.last_page ??
+      metaFrom?.lastPage ??
+      raw?.last_page ??
+      raw?.lastPage ??
+      Math.max(1, Math.ceil((total || 0) / (per_page || 12)));
+
+    const cp = Number(current_page) || 1;
+    const pp = Number(per_page) || 12;
+    const tot = Number(total) || 0;
+    const lp = Number(last_page) || Math.max(1, Math.ceil(tot / pp || 1));
+
+    return {
+      current_page: cp,
+      last_page: lp,
+      per_page: pp,
+      total: tot,
+    };
+  }
+
+  // Products may be at data.data or data (depending on API/serializer)
+  const products = data?.data ?? data ?? [];
+
+  // get safe meta (compute before any conditional returns)
+  const meta = extractMeta(data);
+
+  // If page state somehow exceeds last_page, clamp it.
+  useEffect(() => {
+    if (page > meta.last_page) setPage(meta.last_page);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meta.last_page]);
+
+  // Now safe to return loading/error UI (after all hooks declared)
   if (isLoading) return <div className="container py-5 text-center">Loading products...</div>;
   if (isError) return <div className="container py-5 text-danger text-center">Failed loading products</div>;
-
-  const products = data?.data ?? [];
 
   return (
     <div className="container py-5">
@@ -59,31 +122,34 @@ export default function ProductsPage() {
           </div>
         </div>
 
-        <div className="products-grid">
+        <div className="products-grid" role="list">
           {products.map((p: any) => <ProductCard key={p.id} product={p} />)}
         </div>
 
-        <div className="d-flex justify-content-between align-items-center mt-4">
-          <button
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={data?.meta?.current_page === 1}
-            className="btn btn-outline-secondary btn-sm"
-          >
-            Previous
-          </button>
+        {/* Show pagination only when there's more than 1 page */}
+        {meta.last_page > 1 && (
+          <div className="d-flex justify-content-between align-items-center mt-4">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={meta.current_page <= 1}
+              className="btn btn-outline-secondary btn-sm"
+            >
+              Previous
+            </button>
 
-          <div className="small text-muted">
-            Page {data?.meta?.current_page ?? 1} of {data?.meta?.last_page ?? 1}
+            <div className="small text-muted">
+              Page {meta.current_page} of {meta.last_page} · {meta.total} items
+            </div>
+
+            <button
+              onClick={() => setPage((p) => Math.min(meta.last_page, p + 1))}
+              disabled={meta.current_page >= meta.last_page}
+              className="btn btn-outline-secondary btn-sm"
+            >
+              Next
+            </button>
           </div>
-
-          <button
-            onClick={() => setPage((p) => p + 1)}
-            disabled={data?.meta?.current_page === data?.meta?.last_page}
-            className="btn btn-outline-secondary btn-sm"
-          >
-            Next
-          </button>
-        </div>
+        )}
       </div>
     </div>
   );
