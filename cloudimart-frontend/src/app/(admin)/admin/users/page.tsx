@@ -1,9 +1,12 @@
+//src/app/(admin)/admin/users/page.tsx
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import client from '../../../../lib/api/client';
 import LoadingSpinner from '../../../../components/common/LoadingSpinner';
+import AdminTabs from '../../../../components/common/AdminTabs';
 
+type Location = { id: number; name?: string };
 type User = {
   id: number;
   name: string;
@@ -12,6 +15,13 @@ type User = {
   role: string;
   is_active: boolean;
   created_at: string;
+  updated_at?: string;
+  location_id?: number | null;
+  location?: Location | null;
+  email_verified_at?: string | null;
+  location_verified_at?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
 };
 
 export default function AdminUsersPage() {
@@ -19,53 +29,101 @@ export default function AdminUsersPage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'delivery', phone_number: '' });
   const [message, setMessage] = useState<string | null>(null);
   const [meta, setMeta] = useState<any>(null);
+  const [roleFilter, setRoleFilter] = useState<'all' | 'user' | 'delivery'>('all');
+  const [creating, setCreating] = useState(false);
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [viewUser, setViewUser] = useState<User | null>(null);
 
-  const load = async (p = 1) => {
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    password: '',
+    role: 'delivery',
+    phone_number: '',
+    location_id: '' as number | '' // optional
+  });
+
+  const loadLocations = useCallback(async () => {
+    try {
+      const res = await client.get('/api/admin/locations');
+      // Support both paginated and non-paginated responses
+      const payload = res.data;
+      const list = payload.data ?? payload;
+      setLocations(Array.isArray(list) ? list : []);
+    } catch (err) {
+      // ignore silently - locations are optional
+      console.warn('Failed to load locations', err);
+    }
+  }, []);
+
+  const load = useCallback(async (p = 1, role: string | null = null) => {
     setLoading(true);
     setMessage(null);
     try {
-      const res = await client.get(`/api/admin/users?page=${p}`);
+      const params: Record<string, any> = { page: p, exclude_admin: 1 }; // exclude admin accounts by default
+      if (role && role !== 'all') params.role = role;
+      const query = new URLSearchParams(params).toString();
+      const res = await client.get(`/api/admin/users?${query}`);
       const payload = res.data;
       // Laravel paginator: data in .data
-      setUsers(payload.data ?? payload);
+      const list = payload.data ?? payload;
+      setUsers(list ?? []);
       setMeta({
         current_page: payload.current_page ?? 1,
         last_page: payload.last_page ?? 1,
         total: payload.total ?? (payload.data?.length ?? payload.length ?? 0),
       });
+      setPage(payload.current_page ?? p);
     } catch (err: any) {
       setMessage(err?.response?.data?.message ?? err?.userMessage ?? 'Failed to load users');
+      setUsers([]);
+      setMeta(null);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  useEffect(() => { load(page); }, [page]);
+  useEffect(() => {
+    load(page, roleFilter);
+    loadLocations();
+  }, [load, loadLocations, page, roleFilter]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage(null);
+    setCreating(true);
     try {
-      const res = await client.post('/api/admin/users', form);
-      setMessage('User created');
+      const payload = {
+        name: form.name,
+        email: form.email,
+        password: form.password,
+        phone_number: form.phone_number || null,
+        role: form.role,
+        location_id: form.location_id || null,
+      };
+      const res = await client.post('/api/admin/users', payload);
+      setMessage('User created successfully');
       setShowCreate(false);
-      setForm({ name: '', email: '', password: '', role: 'delivery', phone_number: '' });
-      load();
+      setForm({ name: '', email: '', password: '', role: 'delivery', phone_number: '', location_id: '' });
+      // reload first page of current filter
+      load(1, roleFilter);
     } catch (err: any) {
       setMessage(err?.response?.data?.message ?? err?.userMessage ?? 'Failed to create user');
+    } finally {
+      setCreating(false);
     }
   };
 
-  const toggleActive = async (id: number, active: boolean) => {
+  const toggleActive = async (id: number, currentlyActive: boolean) => {
     setMessage(null);
     try {
-      const url = active ? `/api/admin/users/${id}/deactivate` : `/api/admin/users/${id}/activate`;
+      const url = currentlyActive ? `/api/admin/users/${id}/deactivate` : `/api/admin/users/${id}/activate`;
       const res = await client.post(url);
       setMessage(res.data?.message ?? 'Updated');
-      load();
+      // reload current page
+      load(page, roleFilter);
     } catch (err: any) {
       setMessage(err?.response?.data?.message ?? err?.userMessage ?? 'Update failed');
     }
@@ -75,10 +133,25 @@ export default function AdminUsersPage() {
 
   return (
     <div className="container py-4">
+      <AdminTabs />
+
       <div className="d-flex justify-content-between align-items-center mb-3">
-        <h4>Manage Users</h4>
-        <div>
-          <button className="btn btn-primary" onClick={() => setShowCreate(true)}>Create user</button>
+        <h4 className="mb-0">Manage Users</h4>
+        <div className="d-flex gap-2 align-items-center">
+          <div>
+            <select
+              className="form-select form-select-sm"
+              value={roleFilter}
+              onChange={(e) => { setRoleFilter(e.target.value as any); setPage(1); }}
+              aria-label="Filter by role"
+            >
+              <option value="all">All customers & delivery (admins hidden)</option>
+              <option value="user">Customers (user)</option>
+              <option value="delivery">Delivery personnel</option>
+            </select>
+          </div>
+
+          <button className="btn btn-sm btn-primary" onClick={() => setShowCreate(true)}>Create user</button>
         </div>
       </div>
 
@@ -86,32 +159,51 @@ export default function AdminUsersPage() {
 
       <div className="card mb-3">
         <div className="card-body p-2">
-          <table className="table mb-0">
-            <thead>
-              <tr>
-                <th>Name</th><th>Email</th><th>Phone</th><th>Role</th><th>Active</th><th>Created</th><th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map(u => (
-                <tr key={u.id}>
-                  <td>{u.name}</td>
-                  <td>{u.email}</td>
-                  <td>{u.phone_number ?? '—'}</td>
-                  <td>{u.role}</td>
-                  <td>{u.is_active ? 'Yes' : 'No'}</td>
-                  <td>{new Date(u.created_at).toLocaleString()}</td>
-                  <td>
-                    {u.is_active ? (
-                      <button className="btn btn-sm btn-warning" onClick={() => toggleActive(u.id, true)}>Deactivate</button>
-                    ) : (
-                      <button className="btn btn-sm btn-success" onClick={() => toggleActive(u.id, false)}>Activate</button>
-                    )}
-                  </td>
+          <div className="table-responsive">
+            <table className="table mb-0 table-hover">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Email</th>
+                  <th>Phone</th>
+                  <th>Role</th>
+                  <th>Location</th>
+                  <th>Email verified</th>
+                  <th>Location verified</th>
+                  <th>Active</th>
+                  <th>Created</th>
+                  <th></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {users.length === 0 ? (
+                  <tr><td colSpan={10} className="text-center text-muted">No users found</td></tr>
+                ) : users.map(u => (
+                  <tr key={u.id}>
+                    <td>{u.name}</td>
+                    <td>{u.email}</td>
+                    <td>{u.phone_number ?? '—'}</td>
+                    <td>{u.role}</td>
+                    <td>{u.location?.name ?? (u.location_id ? `#${u.location_id}` : '—')}</td>
+                    <td>{u.email_verified_at ? new Date(u.email_verified_at).toLocaleString() : 'No'}</td>
+                    <td>{u.location_verified_at ? new Date(u.location_verified_at).toLocaleString() : 'No'}</td>
+                    <td>{u.is_active ? 'Yes' : 'No'}</td>
+                    <td>{u.created_at ? new Date(u.created_at).toLocaleString() : '—'}</td>
+                    <td className="text-end">
+                      <div className="d-flex gap-2 justify-content-end">
+                        <button className="btn btn-sm btn-outline-secondary" onClick={() => setViewUser(u)}>View</button>
+                        {u.is_active ? (
+                          <button className="btn btn-sm btn-warning" onClick={() => toggleActive(u.id, true)}>Deactivate</button>
+                        ) : (
+                          <button className="btn btn-sm btn-success" onClick={() => toggleActive(u.id, false)}>Activate</button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -130,7 +222,7 @@ export default function AdminUsersPage() {
         </nav>
       )}
 
-      {/* Create modal (simple) */}
+      {/* Create modal */}
       {showCreate && (
         <div className="modal fade show" style={{ display: 'block', backgroundColor: 'rgba(0,0,0,0.5)' }}>
           <div className="modal-dialog modal-dialog-centered">
@@ -142,30 +234,75 @@ export default function AdminUsersPage() {
                 </div>
                 <div className="modal-body">
                   <div className="mb-2">
-                    <input className="form-control" placeholder="Name" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} required />
+                    <input className="form-control" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
                   </div>
                   <div className="mb-2">
-                    <input className="form-control" placeholder="Email" value={form.email} onChange={(e) => setForm({...form, email: e.target.value})} required />
+                    <input type="email" className="form-control" placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
                   </div>
                   <div className="mb-2">
-                    <input className="form-control" placeholder="Phone (optional)" value={form.phone_number} onChange={(e) => setForm({...form, phone_number: e.target.value})} />
+                    <input className="form-control" placeholder="Phone (optional)" value={form.phone_number} onChange={(e) => setForm({ ...form, phone_number: e.target.value })} />
                   </div>
+
                   <div className="mb-2">
-                    <select className="form-select" value={form.role} onChange={(e) => setForm({...form, role: e.target.value})}>
+                    <select className="form-select" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
                       <option value="user">user</option>
                       <option value="delivery">delivery</option>
-                      <option value="admin">admin</option>
+                      <option value="admin">admin (warning: created admin won't be listed here)</option>
                     </select>
                   </div>
+
                   <div className="mb-2">
-                    <input type="password" className="form-control" placeholder="Password" value={form.password} onChange={(e) => setForm({...form, password: e.target.value})} required />
+                    <select className="form-select" value={String(form.location_id)} onChange={(e) => setForm({ ...form, location_id: e.target.value ? Number(e.target.value) : '' })}>
+                      <option value="">No location</option>
+                      {locations.map((l) => <option key={l.id} value={l.id}>{l.name ?? `#${l.id}`}</option>)}
+                    </select>
+                  </div>
+
+                  <div className="mb-2">
+                    <input type="password" className="form-control" placeholder="Password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required />
+                  </div>
+
+                  <div className="small text-muted">
+                    Tip: Admin accounts are powerful. Use the admin role only for trusted users.
                   </div>
                 </div>
                 <div className="modal-footer">
                   <button type="button" className="btn btn-secondary" onClick={() => setShowCreate(false)}>Cancel</button>
-                  <button type="submit" className="btn btn-primary">Create</button>
+                  <button type="submit" className="btn btn-primary" disabled={creating}>{creating ? 'Creating…' : 'Create'}</button>
                 </div>
               </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* View user modal */}
+      {viewUser && (
+        <div className="modal fade show" style={{ display: 'block', backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <div className="modal-dialog modal-dialog-centered modal-lg">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">User details — {viewUser.name}</h5>
+                <button type="button" className="btn-close" onClick={() => setViewUser(null)} />
+              </div>
+              <div className="modal-body">
+                <dl className="row">
+                  <dt className="col-sm-4">Name</dt><dd className="col-sm-8">{viewUser.name}</dd>
+                  <dt className="col-sm-4">Email</dt><dd className="col-sm-8">{viewUser.email}</dd>
+                  <dt className="col-sm-4">Phone</dt><dd className="col-sm-8">{viewUser.phone_number ?? '—'}</dd>
+                  <dt className="col-sm-4">Role</dt><dd className="col-sm-8">{viewUser.role}</dd>
+                  <dt className="col-sm-4">Location</dt><dd className="col-sm-8">{viewUser.location?.name ?? (viewUser.location_id ? `#${viewUser.location_id}` : '—')}</dd>
+                  <dt className="col-sm-4">Latitude / Longitude</dt><dd className="col-sm-8">{viewUser.latitude ?? '—'} / {viewUser.longitude ?? '—'}</dd>
+                  <dt className="col-sm-4">Email verified</dt><dd className="col-sm-8">{viewUser.email_verified_at ? new Date(viewUser.email_verified_at).toLocaleString() : 'No'}</dd>
+                  <dt className="col-sm-4">Location verified</dt><dd className="col-sm-8">{viewUser.location_verified_at ? new Date(viewUser.location_verified_at).toLocaleString() : 'No'}</dd>
+                  <dt className="col-sm-4">Active</dt><dd className="col-sm-8">{viewUser.is_active ? 'Yes' : 'No'}</dd>
+                  <dt className="col-sm-4">Created</dt><dd className="col-sm-8">{viewUser.created_at ? new Date(viewUser.created_at).toLocaleString() : '—'}</dd>
+                  <dt className="col-sm-4">Updated</dt><dd className="col-sm-8">{viewUser.updated_at ? new Date(viewUser.updated_at).toLocaleString() : '—'}</dd>
+                </dl>
+              </div>
+              <div className="modal-footer">
+                <button className="btn btn-secondary" onClick={() => setViewUser(null)}>Close</button>
+              </div>
             </div>
           </div>
         </div>

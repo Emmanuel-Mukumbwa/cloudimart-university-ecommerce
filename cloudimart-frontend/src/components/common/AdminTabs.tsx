@@ -12,7 +12,7 @@ type Tab = {
 };
 
 const DEFAULT_TABS: Tab[] = [
-  { href: '/admin', label: 'Dashboard', variant: 'outline-primary' },
+  { href: '/admin/dashboard', label: 'Dashboard', variant: 'outline-primary' },
   { href: '/admin/users', label: 'Users', variant: 'outline-primary' },
   { href: '/admin/products', label: 'Products', variant: 'outline-secondary' },
   { href: '/admin/orders', label: 'Orders', variant: 'outline-success' },
