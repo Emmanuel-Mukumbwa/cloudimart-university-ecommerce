@@ -1,10 +1,13 @@
-// File: src/app/(store)/checkout/page.tsx
+// src/app/(store)/checkout/page.tsx
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
 import client from '../../../lib/api/client';
 import { useRouter } from 'next/navigation';
 import CenteredModal from '../../../components/common/CenteredModal';
+import LoadingSpinner from '../../../components/common/LoadingSpinner';
+import CartTable from '../../../components/checkout/CartTable';
+import PaymentModal from '../../../components/checkout/PaymentModal';
 
 type Loc = {
   id: number;
@@ -13,12 +16,6 @@ type Loc = {
   longitude?: number | null;
   radius_km?: number | null;
 };
-
-type ModalState = {
-  show: boolean;
-  title?: string;
-  body?: React.ReactNode;
-}; 
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -34,25 +31,34 @@ export default function CheckoutPage() {
   const [detectedArea, setDetectedArea] = useState<{ id?: number; name?: string } | null>(null);
 
   // Address + UI
-  const [address, setAddress] = useState(''); // delivery address text user must enter
+  const [address, setAddress] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  // Locations dropdown + fallback behavior
+  // Locations dropdown + fallback
   const [locations, setLocations] = useState<Loc[]>([]);
   const [selectedLocationId, setSelectedLocationId] = useState<number | ''>('');
   const [showFallbackChoice, setShowFallbackChoice] = useState(false);
 
-  // Modal
-  const [modal, setModal] = useState<ModalState>({ show: false, title: '', body: '' });
+  // Modal (generic messages)
+  const [modal, setModal] = useState<{ show: boolean; title?: string; body?: React.ReactNode }>({ show: false });
 
   // Payment state & polling
   const [paymentTxRef, setPaymentTxRef] = useState<string | null>(null);
   const [paymentStatus, setPaymentStatus] = useState<'idle' | 'pending' | 'success' | 'failed'>('idle');
   const pollingRef = useRef<number | null>(null);
 
+  // Payment modal & loading
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentLoading, setPaymentLoading] = useState(false);
+
+  // Uploaded proofs (user's payments)
+  const [userPayments, setUserPayments] = useState<any[]>([]);
+  const [loadingPayments, setLoadingPayments] = useState(false);
+
   useEffect(() => {
     loadCart();
     loadLocationsAndUser();
+    fetchPayments();
 
     return () => {
       if (pollingRef.current) {
@@ -62,11 +68,25 @@ export default function CheckoutPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load cart items and totals
+  /**
+   * Helper: safely extract an array of items from various API shapes
+   * Avoid mixing `||` and `??` in one expression to keep parsers happy.
+   */
+  const extractArrayFromResponse = (res: any): any[] => {
+    const payload = res?.data ?? null;
+    if (!payload) return [];
+    if (Array.isArray(payload?.items)) return payload.items;
+    if (Array.isArray(payload?.data?.items)) return payload.data.items;
+    if (Array.isArray(payload?.data)) return payload.data;
+    if (Array.isArray(payload)) return payload;
+    return [];
+  };
+
+  // Load cart items and totals (fixed: no mixed || + ?? usage)
   const loadCart = async () => {
     try {
       const res = await client.get('/api/cart');
-      const items = res.data.items || res.data.data?.items || [];
+      const items = extractArrayFromResponse(res);
       setCartItems(items);
       setTotal(items.reduce((sum: number, i: any) => sum + Number(i.product?.price ?? 0) * (i.quantity ?? 1), 0));
     } catch (e) {
@@ -75,11 +95,26 @@ export default function CheckoutPage() {
     }
   };
 
+  // Fetch user's payment uploads & statuses
+  const fetchPayments = async () => {
+    setLoadingPayments(true);
+    try {
+      const res = await client.get('/api/payments');
+      // safe extraction: prefer res.data.data then res.data
+      const payload = res.data?.data ?? res.data ?? [];
+      setUserPayments(Array.isArray(payload) ? payload : []);
+    } catch (e) {
+      setUserPayments([]);
+    } finally {
+      setLoadingPayments(false);
+    }
+  };
+
   // Load locations and (optionally) user to set default selected location
   const loadLocationsAndUser = async () => {
     try {
       const res = await client.get('/api/locations');
-      const payload = res.data.locations ?? res.data.data ?? res.data;
+      const payload = res.data?.locations ?? res.data?.data ?? res.data ?? [];
       if (Array.isArray(payload)) setLocations(payload);
       else if (Array.isArray(res.data)) setLocations(res.data);
     } catch (e) {
@@ -88,15 +123,14 @@ export default function CheckoutPage() {
 
     try {
       const u = await client.get('/api/user');
-      const user = u.data?.user ?? u.data;
+      const user = u.data?.user ?? u.data ?? null;
       if (user && user.location_id) {
         setSelectedLocationId(user.location_id);
-      } else if (!selectedLocationId && (locations && locations.length > 0)) {
+      } else if (!selectedLocationId && locations.length > 0) {
         setSelectedLocationId(locations[0].id);
       }
     } catch (e) {
-      // ignore if unauthenticated
-      if (!selectedLocationId && (locations && locations.length > 0)) {
+      if (!selectedLocationId && locations.length > 0) {
         setSelectedLocationId(locations[0].id);
       }
     }
@@ -187,7 +221,6 @@ export default function CheckoutPage() {
       }
 
       if (selectedLocationId) {
-        // automatic fallback when a selected location exists
         await useSelectedLocationFallback(true);
       } else {
         setModal({
@@ -264,80 +297,42 @@ export default function CheckoutPage() {
     }
   };
 
-  // --- PAYMENT: initiate (calls your backend) ---
-  const getUserPhone = async (): Promise<string | null> => {
-    try {
-      const res = await client.get('/api/user');
-      const user = res.data?.user ?? res.data;
-      return user?.phone_number ?? null;
-    } catch (e) {
-      return null;
-    }
-  };
+  // --- PAYMENT helpers (polling) ---
 
-  const initiatePayment = async () => {
-    setError(null);
-    if (!verified) {
-      setModal({ show: true, title: 'Need verification', body: 'Please verify location first before making payment.' });
-      return;
-    }
-    if (!address || address.trim().length < 3) {
-      setModal({ show: true, title: 'Address required', body: 'Please enter a delivery address before payment.' });
-      return;
-    }
-
-    try {
-      const payload = {
-        amount: total,
-        mobile: (await getUserPhone()) || '',
-        network: 'mpampa',
-        delivery_lat: gps.lat,
-        delivery_lng: gps.lng,
-        delivery_address: address.trim(),
-      };
-
-      const res = await client.post('/api/payment/initiate', payload);
-      const checkoutUrl = res.data.checkout_url;
-      const txRef = res.data.tx_ref ?? res.data.data?.tx_ref ?? null;
-
-      if (!checkoutUrl || !txRef) {
-        setModal({ show: true, title: 'Payment error', body: 'Payment initiation failed (no URL or tx_ref).' });
-        return;
-      }
-
-      setPaymentTxRef(txRef);
-      setPaymentStatus('pending');
-
-      // open checkout in a new tab so user can complete payment
-      window.open(checkoutUrl, '_blank');
-
-      // start polling payment status
-      startPollingPaymentStatus(txRef);
-
-      setModal({ show: true, title: 'Payment started', body: 'Payment started. Complete the payment in the opened tab. This page will enable Place Order once payment completes.' });
-    } catch (err: any) {
-      setModal({ show: true, title: 'Payment failed', body: err?.response?.data?.error ?? err?.message ?? 'Failed to initiate payment.' });
-    }
-  };
-
-  // Polling payment status
   const startPollingPaymentStatus = (txRef: string) => {
     if (pollingRef.current) window.clearInterval(pollingRef.current);
 
     const start = Date.now();
-    const timeoutMs = 5 * 60 * 1000; // 5 minutes
-    const intervalMs = 3000; // 3s
+    const timeoutMs = 10 * 60 * 1000; // 10 minutes
+    const intervalMs = 4000;
 
-    // use window.setInterval id (number)
     pollingRef.current = window.setInterval(async () => {
       try {
         const res = await client.get('/api/payment/status', { params: { tx_ref: txRef } });
         const status = res.data?.status ?? res.data?.payment?.status ?? null;
+        const payment = res.data?.payment ?? null;
 
         if (status === 'success') {
           setPaymentStatus('success');
+          // If server attached order_id inside payment.meta, show it
+          const meta = payment?.meta ?? null;
+          const orderId =
+            meta?.order_id ??
+            (typeof meta === 'string' ? (() => { try { return JSON.parse(meta)?.order_id ?? null; } catch { return null; } })() : null);
+
+          if (orderId) {
+            setModal({ show: true, title: 'Payment confirmed', body: `Payment confirmed and order created: ${orderId}` });
+            // refresh payments and cart
+            fetchPayments();
+            await loadCart();
+            // stop polling
+            if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
+            return;
+          }
+
+          // else just notify
+          setModal({ show: true, title: 'Payment confirmed', body: 'Payment confirmed. You can now place the order.' });
           if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
-          setModal({ show: true, title: 'Payment confirmed', body: `Payment ${txRef} confirmed. You can now place the order.` });
         } else if (status === 'failed') {
           setPaymentStatus('failed');
           if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
@@ -352,22 +347,104 @@ export default function CheckoutPage() {
       if (Date.now() - start > timeoutMs) {
         if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
         setPaymentStatus('failed');
-        setModal({ show: true, title: 'Payment timeout', body: 'Payment not confirmed within 5 minutes. Please try again.' });
+        setModal({ show: true, title: 'Payment timeout', body: 'Payment not confirmed within expected time. Please contact support.' });
       }
     }, intervalMs);
   };
 
-  // Place Order: requires paymentStatus === 'success'
-  const placeOrder = async () => {
-    setError(null);
-
+  // Open payment options modal
+  const onOpenPaymentOptions = () => {
     if (!cartItems.length) {
       setModal({ show: true, title: 'Cart empty', body: 'Your cart is empty.' });
       return;
     }
+    if (!verified) {
+      setModal({ show: true, title: 'Not verified', body: 'Please verify your delivery location first.' });
+      return;
+    }
+    if (!address || address.trim().length < 3) {
+      setModal({ show: true, title: 'Address required', body: 'Please enter a delivery address before making payment.' });
+      return;
+    }
+
+    setShowPaymentModal(true);
+  };
+
+  // On PayChangu initiation
+  const handleInitiatePayChangu = async (payload: { amount: number; mobile: string; network: string; delivery_lat?: number; delivery_lng?: number; delivery_address?: string }) => {
+    setPaymentLoading(true);
+    try {
+      const res = await client.post('/api/payment/initiate', payload);
+      const checkoutUrl = res.data?.checkout_url ?? res.data?.data?.checkout_url;
+      const txRef = res.data?.tx_ref ?? res.data?.data?.tx_ref ?? null;
+
+      if (!checkoutUrl || !txRef) {
+        throw new Error('Payment initiation failed (no checkout URL or tx_ref returned)');
+      }
+
+      window.open(checkoutUrl, '_blank');
+
+      setPaymentTxRef(txRef);
+      setPaymentStatus('pending');
+      startPollingPaymentStatus(txRef);
+      setModal({ show: true, title: 'Payment started', body: 'PayChangu checkout started in a new tab. Complete payment there. This page will detect confirmation automatically.' });
+      setShowPaymentModal(false);
+
+      return { checkout_url: checkoutUrl, tx_ref: txRef };
+    } catch (err: any) {
+      setModal({ show: true, title: 'Payment failed', body: err?.response?.data?.error ?? err?.message ?? 'Failed to initiate PayChangu payment.' });
+      throw err;
+    } finally {
+      setPaymentLoading(false);
+    }
+  };
+
+  // Handle upload proof
+  const handleUploadProof = async (formData: FormData) => {
+    setPaymentLoading(true);
+    try {
+      const res = await client.post('/api/payment/upload-proof', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      const txRef = res.data?.tx_ref ?? res.data?.data?.tx_ref ?? null;
+
+      if (!txRef) {
+        throw new Error('Upload succeeded but no tx_ref returned. Contact support.');
+      }
+
+      setPaymentTxRef(txRef);
+      setPaymentStatus('pending');
+
+      // start polling for admin approval
+      startPollingPaymentStatus(txRef);
+
+      setModal({ show: true, title: 'Proof uploaded', body: 'Your proof of payment was uploaded. Payment is pending admin approval.' });
+      setShowPaymentModal(false);
+
+      // refresh list
+      fetchPayments();
+
+      return { tx_ref: txRef };
+    } catch (err: any) {
+      setModal({ show: true, title: 'Upload failed', body: err?.response?.data?.message ?? err?.message ?? 'Failed to upload proof.' });
+      throw err;
+    } finally {
+      setPaymentLoading(false);
+    }
+  };
+
+  // Place Order (client triggered; server may auto-place when admin approves)
+  const placeOrder = async () => {
+    setError(null);
+
+    if (!cartItems.length) {
+      setModal({ show: true, title: 'Cart empty', body: 'Your cart is empty' });
+      return;
+    }
 
     if (!verified) {
-      setModal({ show: true, title: 'Not verified', body: 'Please verify your delivery location (GPS or fallback) before placing the order.' });
+      setModal({ show: true, title: 'Not verified', body: 'Please verify your delivery location before placing the order.' });
       return;
     }
 
@@ -381,7 +458,6 @@ export default function CheckoutPage() {
       return;
     }
 
-    // Enforce that payment was completed before allowing order placement
     if (!paymentTxRef || paymentStatus !== 'success') {
       setModal({ show: true, title: 'Payment required', body: 'Please make and confirm a payment first.' });
       return;
@@ -398,17 +474,20 @@ export default function CheckoutPage() {
       const res = await client.post('/api/checkout/place-order', payload);
 
       if (res.data?.success) {
-        // show status (prefer returned order.status if present)
         const returnedStatus = res.data.order?.status ?? 'pending_delivery';
         const statusLabel = returnedStatus === 'pending_delivery' ? 'Pending delivery' : returnedStatus;
 
         setModal({ show: true, title: 'Order placed', body: `Order placed — Order ID: ${res.data.order_id ?? '(check orders page)'}\nStatus: ${statusLabel}` });
+
+        // refresh cart & payments
+        await loadCart();
+        fetchPayments();
       } else {
         setModal({ show: true, title: 'Order failed', body: res.data?.message ?? 'Failed to place order' });
       }
     } catch (err: any) {
       console.error('Place order error', err);
-      setModal({ show: true, title: 'Order failed', body: err?.response?.data?.message ?? 'Failed to place order' });
+      setModal({ show: true, title: 'Order failed', body: err?.response?.data?.message ?? err?.message ?? 'Failed to place order' });
     }
   };
 
@@ -421,12 +500,24 @@ export default function CheckoutPage() {
     setModal({ show: false });
   };
 
-  // Place order disabled until payment confirmed + address present
   const placeOrderDisabled = !(paymentStatus === 'success' && address.trim().length >= 3);
 
   return (
     <div className="container py-5">
       <CenteredModal show={modal.show} title={modal.title} body={modal.body} onClose={handleCloseModal} />
+
+      <PaymentModal
+        show={showPaymentModal}
+        amount={total}
+        defaultMobile={''}
+        defaultNetwork={'mpamba'}
+        defaultAddress={address}
+        defaultLat={gps.lat}
+        defaultLng={gps.lng}
+        onClose={() => setShowPaymentModal(false)}
+        onInitiatePayChangu={handleInitiatePayChangu}
+        onUploadProof={handleUploadProof}
+      />
 
       <div className="bg-white rounded shadow-sm p-4">
         <h4 className="mb-4">Checkout</h4>
@@ -437,30 +528,7 @@ export default function CheckoutPage() {
           </div>
         ) : (
           <>
-            <table className="table table-bordered mb-3">
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th>Qty</th>
-                  <th>Price</th>
-                  <th>Subtotal</th>
-                </tr>
-              </thead>
-              <tbody>
-                {cartItems.map((i) => (
-                  <tr key={i.id}>
-                    <td>{i.product?.name}</td>
-                    <td>{i.quantity}</td>
-                    <td>MK {Number(i.product?.price ?? 0).toFixed(2)}</td>
-                    <td>MK {(Number(i.product?.price ?? 0) * Number(i.quantity ?? 0)).toFixed(2)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            <div className="d-flex justify-content-end mb-3">
-              <h5>Total: MK {total.toFixed(2)}</h5>
-            </div>
+            <CartTable items={cartItems} total={total} />
 
             <div className="border rounded p-3 mb-3">
               <h6>Delivery Location Verification</h6>
@@ -539,19 +607,52 @@ export default function CheckoutPage() {
               </div>
             </div>
 
+            {/* Uploaded proofs list */}
+            <div className="mb-3">
+              <h6>Your payment uploads</h6>
+              {loadingPayments ? (
+                <div className="text-center py-3"><LoadingSpinner /></div>
+              ) : userPayments.length === 0 ? (
+                <div className="text-muted small">No payment uploads yet.</div>
+              ) : (
+                <div className="list-group">
+                  {userPayments.map((p) => (
+                    <div key={p.id ?? p.tx_ref} className="list-group-item d-flex align-items-center gap-3">
+                      <a href={(p.proof_url ? `/storage/${p.proof_url}` : (p.proof_url_full ?? '#'))} target="_blank" rel="noreferrer">
+                        <img src={p.proof_url ? `/storage/${p.proof_url}` : '/images/placeholder.png'} alt="proof" style={{ width: 92, height: 64, objectFit: 'cover', borderRadius: 6 }} />
+                      </a>
+                      <div className="flex-fill">
+                        <div className="d-flex justify-content-between">
+                          <div>
+                            <div className="fw-semibold">{p.tx_ref}</div>
+                            <div className="small text-muted">{p.created_at ? new Date(p.created_at).toLocaleString() : ''}</div>
+                          </div>
+                          <div className="text-end">
+                            <div className={`badge ${p.status === 'success' ? 'bg-success' : p.status === 'failed' ? 'bg-danger' : 'bg-warning text-dark'}`}>
+                              {p.status}
+                            </div>
+                            {p.meta?.order_id && <div className="small mt-1">Order: <strong>{p.meta.order_id}</strong></div>}
+                          </div>
+                        </div>
+                        <div className="small text-muted mt-2">{p.meta?.note ?? ''}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {error && <div className="alert alert-danger">{error}</div>}
 
             <div className="d-flex justify-content-end gap-3">
-              {/* Make Payment button */}
               <button
                 className="btn btn-primary"
-                onClick={initiatePayment}
-                disabled={!verified || address.trim().length < 3 || paymentStatus === 'pending'}
+                onClick={onOpenPaymentOptions}
+                disabled={!verified || address.trim().length < 3 || paymentLoading}
               >
-                {paymentStatus === 'pending' ? 'Payment pending...' : 'Make Payment'}
+                {paymentLoading ? <LoadingSpinner /> : (paymentStatus === 'pending' ? 'Payment pending...' : 'Make Payment')}
               </button>
 
-              {/* Place Order button (only enabled after successful payment) */}
               <button className="btn btn-success btn-lg" onClick={placeOrder} disabled={placeOrderDisabled}>
                 Place Order
               </button>
@@ -562,4 +663,7 @@ export default function CheckoutPage() {
     </div>
   );
 }
+
+
+
 

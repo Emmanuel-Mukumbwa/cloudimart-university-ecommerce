@@ -48,7 +48,7 @@ class PaymentController extends Controller
 
         try {
             $secretKey = config('services.paychangu.secret');
-
+ 
             $payload = [
                 'amount' => $request->amount,
                 'currency' => 'MWK',

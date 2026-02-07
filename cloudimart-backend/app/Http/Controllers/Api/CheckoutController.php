@@ -125,7 +125,7 @@ class CheckoutController extends Controller
             'total' => $total,
             'delivery_address' => $data['delivery_address'],
              'status' => 'pending_delivery',
-            'payment_ref' => $payment->tx_ref,
+            'payment_ref' => $payment->tx_ref, 
         ]);
 
         // 3) Create order items & decrement product stock
