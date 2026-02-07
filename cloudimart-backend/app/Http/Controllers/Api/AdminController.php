@@ -113,32 +113,55 @@ class AdminController extends Controller
     }
 
     /**
-     * GET /api/admin/users
-     * Users listing (admin). Supports:
-     *  - ?role=admin|user|delivery (filters by role)
-     *  - ?is_active=1|0 (filters by active state)
-     *  - pagination
-     */
-    public function users(Request $request)
-    {
-        $this->ensureAdmin($request->user());
+ * GET /api/admin/users
+ * Users listing (admin). Supports:
+ *  - ?role=admin|user|delivery (filters by role)
+ *  - ?is_active=1|0 (filters by active state)
+ *  - ?exclude_admin=1 (exclude admin accounts from results)
+ *  - pagination
+ */
+public function users(Request $request)
+{
+    $this->ensureAdmin($request->user());
 
-        $role = $request->query('role', null);
-        $isActive = $request->query('is_active', null);
+    $role = $request->query('role', null);
+    $isActive = $request->query('is_active', null);
+    $excludeAdmin = $request->query('exclude_admin', false);
 
-        $q = User::query()->select('id','name','email','phone_number','role','is_active','created_at');
+    // Select a broader set of fields that are useful for the admin UI
+    $q = User::query()
+        ->select(
+            'id',
+            'name',
+            'email',
+            'phone_number',
+            'role',
+            'is_active',
+            'created_at',
+            'updated_at',
+            'location_id',
+            'email_verified_at',
+            'location_verified_at',
+            'latitude',
+            'longitude'
+        )
+        ->with(['location:id,name']); // eager-load location name
 
-        if ($role) {
-            $q->where('role', $role);
-        }
-
-        if (!is_null($isActive)) {
-            $q->where('is_active', intval($isActive));
-        }
-
-        $users = $q->orderBy('created_at','desc')->paginate(20);
-        return response()->json($users);
+    if ($role) {
+        $q->where('role', $role);
     }
+
+    if (!is_null($isActive)) {
+        $q->where('is_active', intval($isActive));
+    }
+
+    if ($excludeAdmin) {
+        $q->where('role', '!=', 'admin');
+    }
+
+    $users = $q->orderBy('created_at','desc')->paginate(20);
+    return response()->json($users);
+}
 
     /**
      * POST /api/admin/users
