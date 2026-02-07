@@ -1,10 +1,12 @@
 //src/app/(admin)/admin/users/page.tsx
+// File: src/app/(admin)/admin/users/page.tsx
 'use client';
 
 import React, { useEffect, useState, useCallback } from 'react';
 import client from '../../../../lib/api/client';
 import LoadingSpinner from '../../../../components/common/LoadingSpinner';
 import AdminTabs from '../../../../components/common/AdminTabs';
+import CenteredModal from '../../../../components/common/CenteredModal';
 
 type Location = { id: number; name?: string };
 type User = {
@@ -18,10 +20,10 @@ type User = {
   updated_at?: string;
   location_id?: number | null;
   location?: Location | null;
-  email_verified_at?: string | null;
   location_verified_at?: string | null;
   latitude?: number | null;
   longitude?: number | null;
+  orders_count?: number;
 };
 
 export default function AdminUsersPage() {
@@ -36,24 +38,36 @@ export default function AdminUsersPage() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [viewUser, setViewUser] = useState<User | null>(null);
 
+  // Confirmation modal state for activate/deactivate
+  const [confirmModal, setConfirmModal] = useState<{
+    show: boolean;
+    userId?: number | null;
+    action?: 'deactivate' | 'activate' | null;
+    userName?: string | null;
+  }>({ show: false, userId: null, action: null, userName: null });
+
+  // Loading state for the confirm action (prevents double submit)
+  const [confirmLoading, setConfirmLoading] = useState(false);
+
+  // Success modal for create action
+  const [successModal, setSuccessModal] = useState<{ show: boolean; title?: string; body?: string }>({ show: false });
+
   const [form, setForm] = useState({
     name: '',
     email: '',
     password: '',
     role: 'delivery',
     phone_number: '',
-    location_id: '' as number | '' // optional
+    location_id: '' as number | ''
   });
 
   const loadLocations = useCallback(async () => {
     try {
       const res = await client.get('/api/admin/locations');
-      // Support both paginated and non-paginated responses
       const payload = res.data;
       const list = payload.data ?? payload;
       setLocations(Array.isArray(list) ? list : []);
     } catch (err) {
-      // ignore silently - locations are optional
       console.warn('Failed to load locations', err);
     }
   }, []);
@@ -62,12 +76,11 @@ export default function AdminUsersPage() {
     setLoading(true);
     setMessage(null);
     try {
-      const params: Record<string, any> = { page: p, exclude_admin: 1 }; // exclude admin accounts by default
+      const params: Record<string, any> = { page: p, exclude_admin: 1 };
       if (role && role !== 'all') params.role = role;
       const query = new URLSearchParams(params).toString();
       const res = await client.get(`/api/admin/users?${query}`);
       const payload = res.data;
-      // Laravel paginator: data in .data
       const list = payload.data ?? payload;
       setUsers(list ?? []);
       setMeta({
@@ -77,7 +90,7 @@ export default function AdminUsersPage() {
       });
       setPage(payload.current_page ?? p);
     } catch (err: any) {
-      setMessage(err?.response?.data?.message ?? err?.userMessage ?? 'Failed to load users');
+      setMessage(err?.response?.data?.message ?? err?.message ?? 'Failed to load users');
       setUsers([]);
       setMeta(null);
     } finally {
@@ -105,29 +118,59 @@ export default function AdminUsersPage() {
       };
       const res = await client.post('/api/admin/users', payload);
       setMessage('User created successfully');
+
+      const createdUser = res.data?.user;
+      setSuccessModal({
+        show: true,
+        title: 'User created',
+        body: `User ${createdUser?.name ?? payload.name} created successfully.`
+      });
+
       setShowCreate(false);
       setForm({ name: '', email: '', password: '', role: 'delivery', phone_number: '', location_id: '' });
-      // reload first page of current filter
       load(1, roleFilter);
     } catch (err: any) {
-      setMessage(err?.response?.data?.message ?? err?.userMessage ?? 'Failed to create user');
+      // try to show detailed server message
+      const serverMsg = err?.response?.data?.message ?? err?.response?.data ?? err?.message;
+      setMessage(typeof serverMsg === 'string' ? serverMsg : JSON.stringify(serverMsg));
     } finally {
       setCreating(false);
     }
   };
 
-  const toggleActive = async (id: number, currentlyActive: boolean) => {
-    setMessage(null);
-    try {
-      const url = currentlyActive ? `/api/admin/users/${id}/deactivate` : `/api/admin/users/${id}/activate`;
-      const res = await client.post(url);
-      setMessage(res.data?.message ?? 'Updated');
-      // reload current page
-      load(page, roleFilter);
-    } catch (err: any) {
-      setMessage(err?.response?.data?.message ?? err?.userMessage ?? 'Update failed');
-    }
+  // Open confirm modal instead of directly toggling
+  const confirmToggle = (id: number, action: 'deactivate' | 'activate', userName?: string) => {
+    setConfirmModal({ show: true, userId: id, action, userName: userName ?? null });
   };
+
+  // Called when user confirms action
+const performToggle = async () => {
+  if (!confirmModal.userId || !confirmModal.action) return;
+  setConfirmLoading(true);
+  setMessage(null);
+
+  try {
+    const { userId: id, action } = confirmModal;
+    const url = action === 'deactivate'
+      ? `/api/admin/users/${id}/deactivate`
+      : `/api/admin/users/${id}/activate`;
+
+    // fire the request and wait for it to finish
+    const res = await client.post(url, {});
+    setMessage(res.data?.message ?? 'User updated');
+    
+    // reload after response
+    await load(page, roleFilter);
+  } catch (err: any) {
+    const msg = err?.response?.data?.message ?? err?.message ?? 'Action failed';
+    setMessage(msg);
+  } finally {
+    // only close the modal AFTER everything finishes
+    setConfirmModal({ show: false, userId: null, action: null, userName: null });
+    setConfirmLoading(false);
+  }
+};
+
 
   if (loading) return <div className="container py-5 text-center"><LoadingSpinner /></div>;
 
@@ -168,7 +211,7 @@ export default function AdminUsersPage() {
                   <th>Phone</th>
                   <th>Role</th>
                   <th>Location</th>
-                  <th>Email verified</th>
+                  <th>Orders</th>
                   <th>Location verified</th>
                   <th>Active</th>
                   <th>Created</th>
@@ -185,7 +228,7 @@ export default function AdminUsersPage() {
                     <td>{u.phone_number ?? '—'}</td>
                     <td>{u.role}</td>
                     <td>{u.location?.name ?? (u.location_id ? `#${u.location_id}` : '—')}</td>
-                    <td>{u.email_verified_at ? new Date(u.email_verified_at).toLocaleString() : 'No'}</td>
+                    <td>{typeof u.orders_count !== 'undefined' ? u.orders_count : '—'}</td>
                     <td>{u.location_verified_at ? new Date(u.location_verified_at).toLocaleString() : 'No'}</td>
                     <td>{u.is_active ? 'Yes' : 'No'}</td>
                     <td>{u.created_at ? new Date(u.created_at).toLocaleString() : '—'}</td>
@@ -193,9 +236,9 @@ export default function AdminUsersPage() {
                       <div className="d-flex gap-2 justify-content-end">
                         <button className="btn btn-sm btn-outline-secondary" onClick={() => setViewUser(u)}>View</button>
                         {u.is_active ? (
-                          <button className="btn btn-sm btn-warning" onClick={() => toggleActive(u.id, true)}>Deactivate</button>
+                          <button className="btn btn-sm btn-warning" onClick={() => confirmToggle(u.id, 'deactivate', u.name)}>Deactivate</button>
                         ) : (
-                          <button className="btn btn-sm btn-success" onClick={() => toggleActive(u.id, false)}>Activate</button>
+                          <button className="btn btn-sm btn-success" onClick={() => confirmToggle(u.id, 'activate', u.name)}>Activate</button>
                         )}
                       </div>
                     </td>
@@ -247,7 +290,7 @@ export default function AdminUsersPage() {
                     <select className="form-select" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
                       <option value="user">user</option>
                       <option value="delivery">delivery</option>
-                      <option value="admin">admin (warning: created admin won't be listed here)</option>
+                      <option value="admin">admin (created admin won't be listed here)</option>
                     </select>
                   </div>
 
@@ -293,7 +336,7 @@ export default function AdminUsersPage() {
                   <dt className="col-sm-4">Role</dt><dd className="col-sm-8">{viewUser.role}</dd>
                   <dt className="col-sm-4">Location</dt><dd className="col-sm-8">{viewUser.location?.name ?? (viewUser.location_id ? `#${viewUser.location_id}` : '—')}</dd>
                   <dt className="col-sm-4">Latitude / Longitude</dt><dd className="col-sm-8">{viewUser.latitude ?? '—'} / {viewUser.longitude ?? '—'}</dd>
-                  <dt className="col-sm-4">Email verified</dt><dd className="col-sm-8">{viewUser.email_verified_at ? new Date(viewUser.email_verified_at).toLocaleString() : 'No'}</dd>
+                  <dt className="col-sm-4">Orders</dt><dd className="col-sm-8">{viewUser.orders_count ?? 0}</dd>
                   <dt className="col-sm-4">Location verified</dt><dd className="col-sm-8">{viewUser.location_verified_at ? new Date(viewUser.location_verified_at).toLocaleString() : 'No'}</dd>
                   <dt className="col-sm-4">Active</dt><dd className="col-sm-8">{viewUser.is_active ? 'Yes' : 'No'}</dd>
                   <dt className="col-sm-4">Created</dt><dd className="col-sm-8">{viewUser.created_at ? new Date(viewUser.created_at).toLocaleString() : '—'}</dd>
@@ -308,6 +351,26 @@ export default function AdminUsersPage() {
         </div>
       )}
 
+      {/* Confirmation modal for activate/deactivate */}
+      <CenteredModal
+        show={confirmModal.show}
+        title={confirmModal.action === 'deactivate' ? 'Confirm deactivate' : 'Confirm activate'}
+        body={`Are you sure you want to ${confirmModal.action === 'deactivate' ? 'deactivate' : 'activate'} user "${confirmModal.userName ?? ''}"?`}
+        onClose={performToggle}
+        onCancel={() => setConfirmModal({ show: false, userId: null, action: null, userName: null })}
+        okLabel={confirmModal.action === 'deactivate' ? (confirmLoading ? 'Deactivating…' : 'Deactivate') : (confirmLoading ? 'Activating…' : 'Activate')}
+        cancelLabel="Cancel"
+        size="sm"
+      />
+
+      {/* Success modal for creation */}
+      <CenteredModal
+        show={successModal.show}
+        title={successModal.title}
+        body={successModal.body}
+        onClose={() => setSuccessModal({ show: false })}
+        okLabel="OK"
+      />
     </div>
   );
 }

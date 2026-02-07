@@ -23,7 +23,8 @@ class User extends Authenticatable
         'location_id',
         'latitude',
         'longitude',
-        'role', // added role column
+        'role',
+        'is_active',
     ];
 
     /**

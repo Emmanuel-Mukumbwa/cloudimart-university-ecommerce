@@ -87,11 +87,11 @@ export default function ProductCard({ product }: { product: any }) {
           <button
             className="btn-add"
             onClick={handleAdd}
-            disabled={adding}
-            aria-label={`Add ${product.name} to cart`}
+            disabled={adding || product.stock <= 0}
           >
-            {adding ? 'Adding...' : 'Add To Cart'}
+            {product.stock <= 0 ? 'Out of stock' : adding ? 'Adding...' : 'Add To Cart'}
           </button>
+
         </div>
       </article>
 
@@ -159,7 +159,7 @@ export default function ProductCard({ product }: { product: any }) {
         }
         onClose={() => {
           // View cart
-          setShowAddedModal(false);
+          setShowAddedModal(false); 
           router.push('/cart');
         }}
         onCancel={() => setShowAddedModal(false)}

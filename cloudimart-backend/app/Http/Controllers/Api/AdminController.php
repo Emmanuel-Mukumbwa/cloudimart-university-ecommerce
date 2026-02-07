@@ -128,22 +128,22 @@ public function users(Request $request)
     $isActive = $request->query('is_active', null);
     $excludeAdmin = $request->query('exclude_admin', false);
 
-    // Select a broader set of fields that are useful for the admin UI
+    // Select fields useful for the admin UI and include orders_count as a subquery
     $q = User::query()
         ->select(
-            'id',
-            'name',
-            'email',
-            'phone_number',
-            'role',
-            'is_active',
-            'created_at',
-            'updated_at',
-            'location_id',
-            'email_verified_at',
-            'location_verified_at',
-            'latitude',
-            'longitude'
+            'users.id',
+            'users.name',
+            'users.email',
+            'users.phone_number',
+            'users.role',
+            'users.is_active',
+            'users.created_at',
+            'users.updated_at',
+            'users.location_id',
+            'users.latitude',
+            'users.longitude',
+            'users.location_verified_at',
+            DB::raw('(SELECT COUNT(*) FROM orders WHERE orders.user_id = users.id) as orders_count')
         )
         ->with(['location:id,name']); // eager-load location name
 

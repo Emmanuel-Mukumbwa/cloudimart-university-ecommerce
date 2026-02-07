@@ -18,28 +18,60 @@ class CartController extends Controller
         return response()->json(['success'=>true, 'data'=>['cart'=>$cart, 'items'=>$items]]);
     }
 
-    public function add(Request $request)
-    {
-        $data = $request->validate([
-            'product_id'=>'required|exists:products,id',
-            'quantity'=>'required|integer|min:1'
-        ]);
-        $user = $request->user();
-        $cart = Cart::firstOrCreate(['user_id' => $user->id]);
+public function add(Request $request)
+{
+    $data = $request->validate([
+        'product_id' => 'required|exists:products,id',
+        'quantity'   => 'required|integer|min:1',
+    ]);
 
-        $product = Product::findOrFail($data['product_id']);
-        $item = $cart->items()->where('product_id', $product->id)->first();
-        if ($item) {
-            $item->quantity += $data['quantity'];
-            $item->save();
-        } else {
-            $cart->items()->create([
-                'product_id' => $product->id,
-                'quantity' => $data['quantity']
-            ]);
-        }
-        return response()->json(['success'=>true, 'message'=>'Added to cart']);
+    $user = $request->user();
+    $cart = Cart::firstOrCreate(['user_id' => $user->id]);
+
+    $product = Product::findOrFail($data['product_id']);
+
+    // ✅ Stock check
+    if ($product->stock <= 0) {
+        return response()->json([
+            'success' => false,
+            'message' => 'This product is out of stock.',
+        ], 400);
     }
+
+    $requestedQty = $data['quantity'];
+
+    // If already in cart, merge quantities
+    $item = $cart->items()->where('product_id', $product->id)->first();
+    $currentQty = $item ? $item->quantity : 0;
+    $newQty = $currentQty + $requestedQty;
+
+    // ✅ Quantity validation vs stock
+    if ($newQty > $product->stock) {
+        return response()->json([
+            'success' => false,
+            'message' => "Only {$product->stock} items available in stock.",
+        ], 400);
+    }
+
+    if ($item) {
+        $item->quantity = $newQty;
+        $item->save();
+    } else {
+        $cart->items()->create([
+            'product_id' => $product->id,
+            'quantity'   => $requestedQty,
+        ]);
+    }
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Added to cart',
+        'cart_item' => [
+            'product_id' => $product->id,
+            'quantity'   => $newQty,
+        ]
+    ]);
+}
 
     public function update(Request $request, $itemId)
     {
@@ -64,3 +96,4 @@ class CartController extends Controller
         if ($item->cart->user_id !== $user->id) abort(403);
     }
 }
+ 
