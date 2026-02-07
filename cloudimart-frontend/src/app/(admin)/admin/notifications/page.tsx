@@ -1,8 +1,9 @@
+//src/app/(admin)/admin/notifications/page.tsx
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import client from '../../../lib/api/client';
-import LoadingSpinner from '../../../components/common/LoadingSpinner';
+import client from '../../../../lib/api/client';
+import LoadingSpinner from '../../../../components/common/LoadingSpinner';
 
 type Notification = { id:number, user_id?:number, title:string, message:string, is_read:boolean, created_at?:string };
 

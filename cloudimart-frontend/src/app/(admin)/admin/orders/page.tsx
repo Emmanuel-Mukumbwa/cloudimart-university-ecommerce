@@ -1,8 +1,9 @@
+//src/app/(admin)/admin/orders/page.tsx
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import client from '../../../lib/api/client';
-import LoadingSpinner from '../../../components/common/LoadingSpinner';
+import client from '../../../../lib/api/client';
+import LoadingSpinner from '../../../../components/common/LoadingSpinner';
 
 type OrderItem = { id:number, product_name?:string, price:number, quantity:number };
 type Order = {
