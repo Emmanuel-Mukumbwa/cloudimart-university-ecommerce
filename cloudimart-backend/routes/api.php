@@ -91,11 +91,25 @@ Route::middleware('auth:sanctum')->group(function () {
 // ============================
 // 🧑‍💼 ADMIN ROUTES
 // ============================
-Route::middleware(['auth:sanctum', 'role:admin'])->group(function () {
-    Route::get('/admin/orders', [AdminController::class, 'orders']);
-    Route::post('/admin/orders/{id}/status', [AdminController::class, 'updateOrderStatus']);
-    Route::get('/admin/dashboard', [AdminController::class, 'dashboard']);
-    // add more admin features here later (user management, reports, etc.)
+Route::middleware('auth:sanctum')->group(function () {
+Route::prefix('admin')->group(function () {
+    Route::get('/dashboard', [AdminController::class, 'dashboard']);
+    Route::get('/users', [AdminController::class, 'users']);
+    Route::post('/users', [AdminController::class, 'createUser']);
+    Route::post('/users/{id}/deactivate', [AdminController::class, 'deactivateUser']);
+    Route::post('/users/{id}/activate', [AdminController::class, 'activateUser']);
+
+    Route::get('/products', [AdminController::class, 'products']);
+    Route::post('/products', [AdminController::class, 'saveProduct']);
+    Route::delete('/products/{id}', [AdminController::class, 'deleteProduct']);
+
+    Route::get('/orders', [AdminController::class, 'orders']);
+    Route::post('/orders/{id}/status', [AdminController::class, 'updateOrderStatus']);
+
+    Route::get('/payments', [AdminController::class, 'payments']);
+    Route::post('/notify', [AdminController::class, 'notify']);
+    Route::get('/locations', [AdminController::class, 'locations']);
+});
 });
 
 // ============================
