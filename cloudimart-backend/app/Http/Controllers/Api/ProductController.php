@@ -1,5 +1,6 @@
 <?php
 namespace App\Http\Controllers\Api;
+
 use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Http\Resources\ProductResource;
@@ -20,12 +21,12 @@ class ProductController extends Controller
             if (is_numeric($category)) {
                 $query->where('category_id', (int)$category);
             } else {
-                $query->whereHas('category', fn($qcat)=> $qcat->where('slug', $category));
+                $query->whereHas('category', fn($qcat) => $qcat->where('slug', $category));
             }
         }
 
         if ($q) {
-            $query->where(function($s) use ($q) {
+            $query->where(function ($s) use ($q) {
                 $s->where('name', 'like', "%{$q}%")
                   ->orWhere('description', 'like', "%{$q}%");
             });

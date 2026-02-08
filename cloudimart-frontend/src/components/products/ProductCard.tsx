@@ -1,4 +1,3 @@
-// src/components/products/ProductCard.tsx
 'use client';
 
 import React, { useState } from 'react';
@@ -18,19 +17,35 @@ export default function ProductCard({ product }: { product: any }) {
 
   const priceText = typeof product.price === 'number' ? product.price.toFixed(2) : product.price;
 
+  const getImageSrc = (p: any) => {
+    if (!p) return '/images/placeholder.png';
+    // Prefer full absolute url from backend
+    if (p.image_url_full) return p.image_url_full;
+    if (typeof p.image_url === 'string' && p.image_url.length > 0) {
+      const url = p.image_url;
+      if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('//')) {
+        return url;
+      }
+      // stored path -> use public storage route
+      return `/storage/${url.replace(/^\/+/, '')}`;
+    }
+    return '/images/placeholder.png';
+  };
+
+  const imgSrc = getImageSrc(product);
+
   const handleAdd = async () => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
     if (!token) {
       setShowLoginModal(true);
       return;
-    } 
+    }
 
     try {
       setAdding(true);
       await addToCart(product.id, 1);
       setShowAddedModal(true);
     } catch (err: any) {
-      // If unauthorized or any failure, show login modal
       setShowLoginModal(true);
     } finally {
       setAdding(false);
@@ -61,12 +76,13 @@ export default function ProductCard({ product }: { product: any }) {
 
   return (
     <>
-      <article className="product-card">
-        <div className="media" style={{ cursor: 'pointer' }} onClick={openView}>
+      <article className="product-card card p-3 h-100">
+        <div className="media text-center" style={{ cursor: 'pointer' }} onClick={openView}>
           <img
-            src={product.image_url || '/images/placeholder.png'}
-            alt={product.name}
+            src={imgSrc}
+            alt={product?.name ?? 'product'}
             style={{ maxHeight: 150, width: 'auto', maxWidth: '100%' }}
+            loading="lazy"
           />
         </div>
 
@@ -85,17 +101,16 @@ export default function ProductCard({ product }: { product: any }) {
           </button>
 
           <button
-            className="btn-add"
+            className="btn-add btn btn-primary btn-sm"
             onClick={handleAdd}
-            disabled={adding || product.stock <= 0}
+            disabled={adding || (product.stock ?? 0) <= 0}
           >
             {product.stock <= 0 ? 'Out of stock' : adding ? 'Adding...' : 'Add To Cart'}
           </button>
-
         </div>
       </article>
 
-      {/* View / Quick preview modal (re-uses CenteredModal) */}
+      {/* View modal */}
       <CenteredModal
         show={showViewModal}
         title={product.name}
@@ -104,10 +119,11 @@ export default function ProductCard({ product }: { product: any }) {
             <div className="row gx-3">
               <div className="col-12 col-md-6 text-center">
                 <img
-                  src={product.image_url || '/images/placeholder.png'}
+                  src={imgSrc}
                   alt={product.name}
                   className="img-fluid rounded mb-3"
                   style={{ maxHeight: 260, objectFit: 'contain' }}
+                  loading="lazy"
                 />
               </div>
               <div className="col-12 col-md-6">
@@ -126,13 +142,12 @@ export default function ProductCard({ product }: { product: any }) {
         cancelLabel="Close"
       />
 
-      {/* Not-logged-in prompt (re-uses CenteredModal) */}
+      {/* login modal */}
       <CenteredModal
         show={showLoginModal}
         title="Login required"
         body="Please sign in to add items to your cart or view protected pages. Would you like to sign in now?"
         onClose={() => {
-          // navigate to login; preserve redirect to product page
           const redirect = `/products/${product.id}`;
           router.push(`/login?redirect=${encodeURIComponent(redirect)}`);
         }}
@@ -141,25 +156,25 @@ export default function ProductCard({ product }: { product: any }) {
         cancelLabel="Cancel"
       />
 
-      {/* Added to cart confirmation (re-uses CenteredModal) */}
+      {/* added */}
       <CenteredModal
         show={showAddedModal}
         title="Added to cart"
         body={
           <div className="text-center">
             <img
-              src={product.image_url || '/images/placeholder.png'}
+              src={imgSrc}
               alt={product.name}
               className="img-fluid rounded mb-2"
               style={{ maxHeight: 140, objectFit: 'contain' }}
+              loading="lazy"
             />
             <div className="fw-semibold mb-1">{product.name}</div>
             <div className="text-muted">MK {priceText} — added to your cart.</div>
           </div>
         }
         onClose={() => {
-          // View cart
-          setShowAddedModal(false); 
+          setShowAddedModal(false);
           router.push('/cart');
         }}
         onCancel={() => setShowAddedModal(false)}
