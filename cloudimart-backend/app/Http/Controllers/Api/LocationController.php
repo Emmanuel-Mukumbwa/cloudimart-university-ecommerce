@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Location;
 use App\Services\LocationService;
+use Illuminate\Support\Facades\Log;
 
 class LocationController extends Controller
 {
@@ -58,7 +59,8 @@ class LocationController extends Controller
     /**
      * POST /api/locations/validate
      * Validate a point (lat, lng) to see if it's inside any delivery area (polygon or radius),
-     * and optionally return the specific detected location.
+     * optionally persist a server-trusted verification for the authenticated user,
+     * and return the specific detected location.
      */
     public function validatePoint(Request $request)
     {
@@ -66,6 +68,7 @@ class LocationController extends Controller
             'lat' => 'required|numeric',
             'lng' => 'required|numeric',
             'location_id' => 'nullable|exists:locations,id',
+            'cart_hash' => 'nullable|string',
         ]);
 
         $lat = (float) $data['lat'];
@@ -107,6 +110,28 @@ class LocationController extends Controller
                 } else {
                     $matchesSelected = false;
                 }
+            } 
+        }
+
+        // If insideAny and user authenticated, persist server-trusted verification
+        if ($insideAny && $request->user()) {
+            try {
+                $user = $request->user();
+
+                $meta = [
+                    'lat' => $lat,
+                    'lng' => $lng,
+                    'detected_location' => $detected,
+                    'cart_hash' => $data['cart_hash'] ?? null,
+                ];
+
+                $user->delivery_verified_at = now();
+                $user->delivery_verified_meta = $meta;
+                $user->save();
+            } catch (\Throwable $e) {
+                // Don't fail the whole validation if persisting the user verification fails;
+                // log for later debugging.
+                Log::warning('Failed to persist delivery verification for user ID ' . optional($request->user())->id . ': ' . $e->getMessage());
             }
         }
 
@@ -115,6 +140,9 @@ class LocationController extends Controller
             'inside_any_area' => $insideAny,
             'matches_selected' => $matchesSelected,
             'detected_location' => $detected,
+            // include the user's persisted verification values (if any)
+            'delivery_verified_at' => optional($request->user())->delivery_verified_at,
+            'delivery_verified_meta' => optional($request->user())->delivery_verified_meta,
         ]);
     }
 }
