@@ -15,9 +15,10 @@ type Payment = {
   mobile?: string;
   amount: number;
   currency?: string;
-  status: string; 
+  status: string;
   created_at?: string;
   proof_url?: string | null;
+  proof_url_full?: string | null;
   meta?: any;
 };
 
@@ -83,6 +84,18 @@ export default function AdminPaymentsPage() {
     }
   };
 
+  const imgSrcFor = (p: Payment) => {
+    if (p.proof_url_full) return p.proof_url_full;
+    if (p.proof_url) return `/storage/${p.proof_url}`;
+    return '/images/placeholder.png';
+  };
+
+  const hrefFor = (p: Payment) => {
+    if (p.proof_url_full) return p.proof_url_full;
+    if (p.proof_url) return `/storage/${p.proof_url}`;
+    return null;
+  };
+
   return (
     <div className="container py-4">
       <div className="d-flex justify-content-between align-items-center mb-3">
@@ -124,8 +137,8 @@ export default function AdminPaymentsPage() {
                 <tr key={p.id}>
                   <td style={{ width: 120 }}>
                     {p.proof_url ? (
-                      <a href={`/storage/${p.proof_url}`} target="_blank" rel="noreferrer">
-                        <img src={`/storage/${p.proof_url}`} alt="proof" style={{ height: 56, width: 96, objectFit: 'cover', borderRadius: 6 }} />
+                      <a href={hrefFor(p) ?? '#'} target="_blank" rel="noreferrer">
+                        <img src={imgSrcFor(p)} alt="proof" style={{ height: 56, width: 96, objectFit: 'cover', borderRadius: 6 }} />
                       </a>
                     ) : (
                       <div className="text-muted small">No proof</div>
@@ -172,8 +185,9 @@ export default function AdminPaymentsPage() {
               <p className="small text-muted">TX: {selectedPayment.tx_ref} — Amount: MK {Number(selectedPayment.amount).toFixed(2)}</p>
               {selectedPayment.proof_url && (
                 <div className="text-center mt-3">
-                  <a href={`/storage/${selectedPayment.proof_url}`} target="_blank" rel="noreferrer">
-                    <img src={`/storage/${selectedPayment.proof_url}`} alt="proof" style={{ maxWidth: '320px', width: '100%', objectFit: 'contain', borderRadius: 8 }} />
+                  <a href={selectedPayment.proof_url_full ?? `/storage/${selectedPayment.proof_url}`} target="_blank" rel="noreferrer">
+                    <img src={selectedPayment.proof_url_full ?? `/storage/${selectedPayment.proof_url}`} alt="proof"
+                         style={{ maxWidth: '320px', width: '100%', objectFit: 'contain', borderRadius: 8 }} />
                   </a>
                 </div>
               )}

@@ -32,7 +32,7 @@ class Payment extends Model
         'currency',
         'status',
         'meta',
-        'proof_url', 
+        'proof_url',
     ];
 
     /**
@@ -44,6 +44,31 @@ class Payment extends Model
         'meta' => 'array',
         'amount' => 'decimal:2',
     ];
+
+    /**
+     * Append derived attributes to JSON
+     *
+     * @var array
+     */
+    protected $appends = [
+        'proof_url_full',
+    ];
+
+    /**
+     * Accessor: absolute URL for proof image (or null)
+     *
+     * Uses asset('storage/...') which relies on APP_URL in your backend .env.
+     *
+     * @return string|null
+     */
+    public function getProofUrlFullAttribute()
+    {
+        if (empty($this->proof_url)) {
+            return null;
+        }
+
+        return asset('storage/' . ltrim($this->proof_url, '/'));
+    }
 
     /**
      * Payment belongs to a user.
