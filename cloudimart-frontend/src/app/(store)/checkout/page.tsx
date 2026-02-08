@@ -23,6 +23,7 @@ export default function CheckoutPage() {
   // Cart + totals
   const [cartItems, setCartItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
+  const [cartHash, setCartHash] = useState<string | null>(null);
 
   // Location / GPS
   const [gps, setGps] = useState<{ lat?: number; lng?: number }>({});
@@ -56,9 +57,12 @@ export default function CheckoutPage() {
   const [loadingPayments, setLoadingPayments] = useState(false);
 
   useEffect(() => {
-    loadCart();
-    loadLocationsAndUser();
-    fetchPayments();
+    (async () => {
+      // Load cart first (so we compute a cartHash), then locations/user, then payments filtered by cartHash
+      const computed = await loadCart();
+      await loadLocationsAndUser();
+      await fetchPayments(computed ?? null);
+    })();
 
     return () => {
       if (pollingRef.current) {
@@ -82,24 +86,52 @@ export default function CheckoutPage() {
     return [];
   };
 
-  // Load cart items and totals (fixed: no mixed || + ?? usage)
-  const loadCart = async () => {
+  // --- CART HASH HELPERS ---
+  const computeCartHash = (items: any[]) => {
+    try {
+      const arr = items.map((i) => ({
+        id: Number(i.product?.id ?? i.product_id ?? 0),
+        q: Number(i.quantity ?? 1),
+        p: Number(i.product?.price ?? 0),
+      }));
+      const s = JSON.stringify(arr);
+      // quick non-crypto hash (djb2-like)
+      let h = 5381;
+      for (let i = 0; i < s.length; i++) {
+        h = (h * 33) ^ s.charCodeAt(i);
+      }
+      return 'ch_' + (h >>> 0).toString(36);
+    } catch {
+      return null;
+    }
+  };
+
+  // Load cart items and totals (returns computed cartHash for immediate use)
+  const loadCart = async (): Promise<string | null> => {
     try {
       const res = await client.get('/api/cart');
       const items = extractArrayFromResponse(res);
       setCartItems(items);
       setTotal(items.reduce((sum: number, i: any) => sum + Number(i.product?.price ?? 0) * (i.quantity ?? 1), 0));
+      const hash = computeCartHash(items);
+      setCartHash(hash);
+      return hash;
     } catch (e) {
       setCartItems([]);
       setTotal(0);
+      setCartHash(null);
+      return null;
     }
   };
 
-  // Fetch user's payment uploads & statuses
-  const fetchPayments = async () => {
+  // Fetch user's payment uploads & statuses (optionally filtered by cartHash)
+  const fetchPayments = async (filterHash: string | null = null) => {
     setLoadingPayments(true);
     try {
-      const res = await client.get('/api/payments');
+      const effectiveHash = filterHash ?? cartHash ?? null;
+      const params: any = {};
+      if (effectiveHash) params.cart_hash = effectiveHash;
+      const res = await client.get('/api/payments', { params });
       // safe extraction: prefer res.data.data then res.data
       const payload = res.data?.data ?? res.data ?? [];
       setUserPayments(Array.isArray(payload) ? payload : []);
@@ -323,7 +355,7 @@ export default function CheckoutPage() {
           if (orderId) {
             setModal({ show: true, title: 'Payment confirmed', body: `Payment confirmed and order created: ${orderId}` });
             // refresh payments and cart
-            fetchPayments();
+            await fetchPayments();
             await loadCart();
             // stop polling
             if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
@@ -370,11 +402,12 @@ export default function CheckoutPage() {
     setShowPaymentModal(true);
   };
 
-  // On PayChangu initiation
+  // On PayChangu initiation (now includes cart_hash)
   const handleInitiatePayChangu = async (payload: { amount: number; mobile: string; network: string; delivery_lat?: number; delivery_lng?: number; delivery_address?: string }) => {
     setPaymentLoading(true);
     try {
-      const res = await client.post('/api/payment/initiate', payload);
+      const body = { ...payload, cart_hash: cartHash };
+      const res = await client.post('/api/payment/initiate', body);
       const checkoutUrl = res.data?.checkout_url ?? res.data?.data?.checkout_url;
       const txRef = res.data?.tx_ref ?? res.data?.data?.tx_ref ?? null;
 
@@ -390,6 +423,9 @@ export default function CheckoutPage() {
       setModal({ show: true, title: 'Payment started', body: 'PayChangu checkout started in a new tab. Complete payment there. This page will detect confirmation automatically.' });
       setShowPaymentModal(false);
 
+      // refresh payments but filtered to cartHash
+      fetchPayments(cartHash);
+
       return { checkout_url: checkoutUrl, tx_ref: txRef };
     } catch (err: any) {
       setModal({ show: true, title: 'Payment failed', body: err?.response?.data?.error ?? err?.message ?? 'Failed to initiate PayChangu payment.' });
@@ -399,10 +435,11 @@ export default function CheckoutPage() {
     }
   };
 
-  // Handle upload proof
+  // Handle upload proof (include cart_hash)
   const handleUploadProof = async (formData: FormData) => {
     setPaymentLoading(true);
     try {
+      if (cartHash) formData.append('cart_hash', cartHash);
       const res = await client.post('/api/payment/upload-proof', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
@@ -422,8 +459,8 @@ export default function CheckoutPage() {
       setModal({ show: true, title: 'Proof uploaded', body: 'Your proof of payment was uploaded. Payment is pending admin approval.' });
       setShowPaymentModal(false);
 
-      // refresh list
-      fetchPayments();
+      // refresh list for this cart
+      fetchPayments(cartHash);
 
       return { tx_ref: txRef };
     } catch (err: any) {
@@ -502,6 +539,9 @@ export default function CheckoutPage() {
 
   const placeOrderDisabled = !(paymentStatus === 'success' && address.trim().length >= 3);
 
+  // Determine if we should show the full verification UI
+  const showVerificationBlock = !(verified && (paymentTxRef || (userPayments.length > 0)));
+
   return (
     <div className="container py-5">
       <CenteredModal show={modal.show} title={modal.title} body={modal.body} onClose={handleCloseModal} />
@@ -530,82 +570,97 @@ export default function CheckoutPage() {
           <>
             <CartTable items={cartItems} total={total} />
 
-            <div className="border rounded p-3 mb-3">
-              <h6>Delivery Location Verification</h6>
+            {showVerificationBlock ? (
+              <div className="border rounded p-3 mb-3">
+                <h6>Delivery Location Verification</h6>
 
-              <div className="mb-3">
-                <label className="form-label small">Delivery address (hostel/office/room)</label>
-                <input
-                  type="text"
-                  className="form-control"
-                  placeholder="e.g. Hostel A, Room 12"
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                />
-              </div>
-
-              <div className="mb-3">
-                <label className="form-label small">Select location</label>
-                <select
-                  className="form-select"
-                  value={selectedLocationId}
-                  onChange={(e) => setSelectedLocationId(e.target.value ? Number(e.target.value) : '')}
-                  disabled={verified}
-                >
-                  <option value="">Choose location</option>
-                  {locations.map((l) => (
-                    <option key={l.id} value={l.id}>
-                      {l.name}
-                    </option>
-                  ))}
-                </select>
-                <div className="form-text small mt-1">
-                  If GPS fails we will automatically use this selected location as fallback.
+                <div className="mb-3">
+                  <label className="form-label small">Delivery address (hostel/office/room)</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    placeholder="e.g. Hostel A, Room 12"
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                  />
                 </div>
-              </div>
 
-              <div className="d-flex gap-2 align-items-center">
-                <button className="btn btn-outline-primary" onClick={requestGps} disabled={verifying}>
-                  {verifying ? 'Verifying...' : verified ? 'Location Verified ✓' : 'Verify via GPS'}
-                </button>
+                <div className="mb-3">
+                  <label className="form-label small">Select location</label>
+                  <select
+                    className="form-select"
+                    value={selectedLocationId}
+                    onChange={(e) => setSelectedLocationId(e.target.value ? Number(e.target.value) : '')}
+                    disabled={verified}
+                  >
+                    <option value="">Choose location</option>
+                    {locations.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="form-text small mt-1">
+                    If GPS fails we will automatically use this selected location as fallback.
+                  </div>
+                </div>
 
-                <div className="small text-muted ms-3">
-                  {gps.lat && gps.lng ? (
-                    <>
-                      Lat: <strong>{gps.lat.toFixed(6)}</strong>, Lng: <strong>{gps.lng.toFixed(6)}</strong>
-                    </>
-                  ) : (
-                    <>No coordinates yet</>
+                <div className="d-flex gap-2 align-items-center">
+                  <button className="btn btn-outline-primary" onClick={requestGps} disabled={verifying}>
+                    {verifying ? 'Verifying...' : verified ? 'Location Verified ✓' : 'Verify via GPS'}
+                  </button>
+
+                  <div className="small text-muted ms-3">
+                    {gps.lat && gps.lng ? (
+                      <>
+                        Lat: <strong>{gps.lat.toFixed(6)}</strong>, Lng: <strong>{gps.lng.toFixed(6)}</strong>
+                      </>
+                    ) : (
+                      <>No coordinates yet</>
+                    )}
+                  </div>
+
+                  {showFallbackChoice && (
+                    <button
+                      className="btn btn-outline-secondary ms-3"
+                      onClick={() => useSelectedLocationFallback(false)}
+                      disabled={!selectedLocationId || verifying}
+                    >
+                      Use selected location as fallback
+                    </button>
+                  )}
+
+                  {paymentTxRef && (
+                    <div className="ms-3 small">
+                      Payment: <strong>{paymentStatus}</strong> {paymentTxRef ? `(tx: ${paymentTxRef})` : null}
+                    </div>
                   )}
                 </div>
 
-                {showFallbackChoice && (
-                  <button
-                    className="btn btn-outline-secondary ms-3"
-                    onClick={() => useSelectedLocationFallback(false)}
-                    disabled={!selectedLocationId || verifying}
-                  >
-                    Use selected location as fallback
-                  </button>
-                )}
-
-                {paymentTxRef && (
-                  <div className="ms-3 small">
-                    Payment: <strong>{paymentStatus}</strong> {paymentTxRef ? `(tx: ${paymentTxRef})` : null}
-                  </div>
-                )}
+                <div className="mt-2">
+                  {detectedArea ? (
+                    <div className="alert alert-success mb-0 p-2">Detected area: <strong>{detectedArea.name}</strong></div>
+                  ) : (
+                    !verifying && gps.lat && gps.lng && !verified && (
+                      <div className="alert alert-warning mb-0 p-2">Coordinates are outside delivery zones.</div>
+                    )
+                  )}
+                </div>
               </div>
-
-              <div className="mt-2">
-                {detectedArea ? (
-                  <div className="alert alert-success mb-0 p-2">Detected area: <strong>{detectedArea.name}</strong></div>
-                ) : (
-                  !verifying && gps.lat && gps.lng && !verified && (
-                    <div className="alert alert-warning mb-0 p-2">Coordinates are outside delivery zones.</div>
-                  )
-                )}
+            ) : (
+              <div className="border rounded p-3 mb-3">
+                <h6>Delivery confirmed</h6>
+                <div className="small text-muted mb-2">
+                  Delivery location verified {detectedArea?.name ? `— ${detectedArea.name}` : ''}.
+                </div>
+                <div className="small">Address: <strong>{address || '—'}</strong></div>
+                <div className="small">Coordinates: {gps.lat && gps.lng ? <strong>{gps.lat.toFixed(6)}, {gps.lng.toFixed(6)}</strong> : '—'}</div>
+                <div className="mt-3">
+                  <strong>Payments for this order</strong>
+                  {/* userPayments list below already reflects filtered payments */}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Uploaded proofs list */}
             <div className="mb-3">
@@ -663,7 +718,3 @@ export default function CheckoutPage() {
     </div>
   );
 }
-
-
-
-
