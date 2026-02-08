@@ -15,13 +15,13 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use App\Models\Payment;
 use Exception;
-use Illuminate\Support\Facades\Storage; // optional - for clarity if you want to use Storage facade
+use Illuminate\Support\Facades\Storage;
 
 class PaymentController extends Controller
 {
     /**
      * POST /api/payment/initiate
-     * Expects: amount, mobile, network, delivery_lat, delivery_lng, delivery_address
+     * Expects: amount, mobile, network, delivery_lat, delivery_lng, delivery_address, cart_hash
      * Returns: { checkout_url, tx_ref }
      */
     public function initiate(Request $request)
@@ -33,6 +33,7 @@ class PaymentController extends Controller
             'delivery_lat' => 'nullable|numeric',
             'delivery_lng' => 'nullable|numeric',
             'delivery_address' => 'nullable|string',
+            'cart_hash' => 'nullable|string',
         ]);
 
         // create unique merchant tx ref
@@ -51,6 +52,7 @@ class PaymentController extends Controller
                 'delivery_lat' => $request->delivery_lat,
                 'delivery_lng' => $request->delivery_lng,
                 'delivery_address' => $request->delivery_address,
+                'cart_hash' => $request->cart_hash ?? null,
             ],
         ]);
 
@@ -88,14 +90,12 @@ class PaymentController extends Controller
             Log::info('PayChangu initiate response', ['response' => $response->json()]);
 
             if ($response->successful() && data_get($response->json(), 'status') === 'success') {
-                // Return checkout_url and tx_ref to frontend
                 return response()->json([
                     'checkout_url' => data_get($response->json(), 'data.checkout_url'),
                     'tx_ref' => $txRef,
                 ], 200);
             }
 
-            // mark failed locally
             $payment->update(['status' => 'failed']);
             return response()->json(['error' => $response->body()], 500);
 
@@ -108,9 +108,6 @@ class PaymentController extends Controller
 
     /**
      * GET /api/payment/status?tx_ref=...
-     * Single consolidated status method:
-     * - returns local status immediately if final
-     * - otherwise calls PayChangu verify endpoint to refresh status
      */
     public function status(Request $request)
     {
@@ -120,16 +117,14 @@ class PaymentController extends Controller
         }
 
         $payment = Payment::where('tx_ref', $txRef)->first();
-        if (! $payment) {
+        if (!$payment) {
             return response()->json(['message' => 'Payment not found'], 404);
         }
 
-        // If already finalised locally, return immediately
         if (in_array($payment->status, ['success', 'failed'])) {
             return response()->json(['status' => $payment->status, 'payment' => $payment], 200);
         }
 
-        // Otherwise call PayChangu verify endpoint and update if necessary
         try {
             $secretKey = config('services.paychangu.secret');
 
@@ -141,7 +136,7 @@ class PaymentController extends Controller
             Log::info('PayChangu verify response', ['tx_ref' => $txRef, 'response' => $res->json()]);
 
             if ($res->successful() && data_get($res->json(), 'status') === 'success') {
-                $remoteStatus = data_get($res->json(), 'data.status'); // e.g. 'success' or 'failed'
+                $remoteStatus = data_get($res->json(), 'data.status');
                 $providerRef = data_get($res->json(), 'data.transaction_id') ?? data_get($res->json(), 'data.transactionId');
 
                 if ($remoteStatus === 'success') {
@@ -153,12 +148,10 @@ class PaymentController extends Controller
                     $payment->update(['status' => 'failed']);
                 }
             } else {
-                // if verify failed (non-200) keep pending — but return remote body for debugging
                 return response()->json(['status' => $payment->status, 'remote' => $res->json()], 200);
             }
         } catch (Exception $e) {
             Log::error('PayChangu verify error', ['message' => $e->getMessage(), 'tx_ref' => $txRef]);
-            // return local status but include error message for diagnostics
             return response()->json(['status' => $payment->status, 'error' => $e->getMessage()], 200);
         }
 
@@ -168,7 +161,6 @@ class PaymentController extends Controller
 
     /**
      * POST /api/payment/callback
-     * PayChangu will redirect/call this with tx_ref and status (and maybe transaction_id)
      */
     public function handleCallback(Request $request)
     {
@@ -178,17 +170,16 @@ class PaymentController extends Controller
         $status = $request->input('status') ?? null;
         $providerRef = $request->input('transaction_id') ?? $request->input('transactionId') ?? null;
 
-        if (! $txRef) {
+        if (!$txRef) {
             return response()->json(['message' => 'tx_ref missing'], 400);
         }
 
         $payment = Payment::where('tx_ref', $txRef)->first();
 
-        if (! $payment) {
+        if (!$payment) {
             return response()->json(['message' => 'Payment not found'], 404);
         }
 
-        // Map remote to local statuses (adjust if PayChangu uses different words)
         if ($status === 'success') {
             $payment->update([
                 'status' => 'success',
@@ -197,7 +188,6 @@ class PaymentController extends Controller
         } elseif ($status === 'failed') {
             $payment->update(['status' => 'failed']);
         } else {
-            // unknown status — persist raw payload to meta for later debugging
             $meta = $payment->meta ?? [];
             $meta = array_merge(is_array($meta) ? $meta : json_decode($meta, true) ?? [], ['last_callback' => $request->all()]);
             $payment->update(['meta' => $meta]);
@@ -207,26 +197,34 @@ class PaymentController extends Controller
     }
 
     /**
-     * List payments for the authenticated user
      * GET /api/payments
+     * Supports ?cart_hash=... or ?tx_ref=...
      */
     public function index(Request $request)
     {
         $user = $request->user();
         if (!$user) return response()->json(['message' => 'Unauthorized'], 401);
 
-        $payments = Payment::where('user_id', $user->id)
-            ->orderBy('created_at', 'desc')
-            ->get();
+        $paymentsQuery = Payment::where('user_id', $user->id)->orderBy('created_at', 'desc');
 
-        // Return payments as-is; client will read `proof_url` and `meta`
+        $cartHash = $request->query('cart_hash');
+        $txRef = $request->query('tx_ref');
+
+        if ($txRef) {
+            $paymentsQuery->where('tx_ref', $txRef);
+        } elseif ($cartHash) {
+            // assumes 'meta' is a JSON column
+            $paymentsQuery->whereRaw("JSON_EXTRACT(meta, '$.cart_hash') = ?", [$cartHash]);
+        }
+
+        $payments = $paymentsQuery->get();
+
         return response()->json(['data' => $payments], 200);
     }
 
     /**
-     * Upload proof of payment (multipart/form-data)
      * POST /api/payment/upload-proof
-     * Fields: file (image), amount, mobile, network, delivery_lat, delivery_lng, delivery_address, note
+     * Fields: file, amount, mobile, network, delivery_lat, delivery_lng, delivery_address, note, cart_hash
      */
     public function uploadProof(Request $request)
     {
@@ -234,7 +232,7 @@ class PaymentController extends Controller
         if (!$user) return response()->json(['message' => 'Unauthorized'], 401);
 
         $validated = $request->validate([
-            'file' => 'required|image|max:5120', // max 5MB
+            'file' => 'required|image|max:5120',
             'amount' => 'required|numeric|min:0.01',
             'mobile' => 'required|string',
             'network' => 'required|string',
@@ -242,15 +240,14 @@ class PaymentController extends Controller
             'delivery_lng' => 'nullable|numeric',
             'delivery_address' => 'nullable|string',
             'note' => 'nullable|string',
+            'cart_hash' => 'nullable|string',
         ]);
 
         DB::beginTransaction();
         try {
             $file = $request->file('file');
-            // store on public disk under payments/
             $path = $file->store('payments', 'public');
 
-            // unique tx ref for manual proof
             $txRef = 'proof_' . uniqid();
 
             $payment = Payment::create([
@@ -266,6 +263,7 @@ class PaymentController extends Controller
                     'delivery_lat' => $validated['delivery_lat'] ?? null,
                     'delivery_lng' => $validated['delivery_lng'] ?? null,
                     'delivery_address' => $validated['delivery_address'] ?? null,
+                    'cart_hash' => $validated['cart_hash'] ?? null,
                 ],
                 'proof_url' => $path,
             ]);
@@ -281,20 +279,15 @@ class PaymentController extends Controller
     }
 
     /**
-     * Admin: Approve a manual payment / mark as success and auto-place order
-     * POST /api/admin/payments/{id}/approve
-     *
-     * NOTE: This endpoint must be protected under admin role middleware.
+     * Admin approval (unchanged)
      */
     public function adminApprove(Request $request, $id)
     {
-        // ensure admin (middleware should ideally check role); here we assume middleware applied
         $payment = Payment::find($id);
-        if (! $payment) {
+        if (!$payment) {
             return response()->json(['message' => 'Payment not found'], 404);
         }
 
-        // If already success, return idempotent response
         if ($payment->status === 'success') {
             $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
             return response()->json(['message' => 'Already approved', 'payment' => $payment, 'meta' => $meta], 200);
@@ -302,21 +295,17 @@ class PaymentController extends Controller
 
         DB::beginTransaction();
         try {
-            // 1) mark payment success
             $payment->status = 'success';
             $payment->save();
 
-            // 2) try to create order for this payment's user (idempotent)
-            $user = $payment->user; // Payment should have user relation defined
-            if (! $user) {
+            $user = $payment->user;
+            if (!$user) {
                 DB::rollBack();
                 return response()->json(['message' => 'Payment has no associated user'], 400);
             }
 
-            // Ensure no existing order for this payment tx_ref
             $existing = Order::where('payment_ref', $payment->tx_ref)->first();
             if ($existing) {
-                // attach order id into payment meta if missing
                 $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
                 if (empty($meta['order_id'])) {
                     $meta['order_id'] = $existing->order_id;
@@ -327,37 +316,31 @@ class PaymentController extends Controller
                 return response()->json(['message' => 'Payment approved; existing order found', 'order' => $existing], 200);
             }
 
-            // fetch cart for user
-            $cart = \App\Models\Cart::where('user_id', $user->id)->with('items.product')->first();
-            if (! $cart || $cart->items->isEmpty()) {
-                // no cart — still mark payment success but cannot auto-place
+            $cart = Cart::where('user_id', $user->id)->with('items.product')->first();
+            if (!$cart || $cart->items->isEmpty()) {
                 $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
                 $meta['note'] = ($meta['note'] ?? '') . ' | No cart found to auto-place order';
                 $payment->meta = $meta;
                 $payment->save();
                 DB::commit();
-                return response()->json(['message' => 'Payment marked success but user cart empty; manual intervention required.'], 200);
+                return response()->json(['message' => 'Payment marked success but user cart empty.'], 200);
             }
 
-            // compute total server-side and verify amount matches payment.amount
             $total = 0;
             foreach ($cart->items as $ci) {
                 $total += ($ci->product->price * $ci->quantity);
             }
 
             if (floatval($payment->amount) != floatval($total)) {
-                // mismatch: still mark payment success but warn
                 $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
                 $meta['amount_mismatch'] = ['payment' => $payment->amount, 'cart_total' => $total];
                 $payment->meta = $meta;
                 $payment->save();
 
                 DB::rollBack();
-                return response()->json(['message' => 'Amount mismatch between payment and cart total. Aborting auto-place.', 'meta' => $meta], 422);
+                return response()->json(['message' => 'Amount mismatch', 'meta' => $meta], 422);
             }
 
-            // 3) stock checks and order creation (very similar to CheckoutController::placeOrder)
-            $insufficient = [];
             foreach ($cart->items as $ci) {
                 $productRow = DB::table('products')->where('id', $ci->product_id)->lockForUpdate()->first();
                 if (!$productRow) {
@@ -367,25 +350,15 @@ class PaymentController extends Controller
 
                 $currentStock = intval($productRow->stock ?? 0);
                 if ($currentStock < intval($ci->quantity)) {
-                    $insufficient[] = [
-                        'product_id' => $ci->product_id,
-                        'available' => $currentStock,
-                        'requested' => intval($ci->quantity),
-                    ];
+                    DB::rollBack();
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Some items are out of stock'
+                    ], 409);
                 }
             }
 
-            if (!empty($insufficient)) {
-                DB::rollBack();
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Some items are out of stock',
-                    'items' => $insufficient
-                ], 409);
-            }
-
-            // Create order id
-            $orderId = 'ORD-' . date('Ymd') . '-' . strtoupper(\Illuminate\Support\Str::random(6));
+            $orderId = 'ORD-' . date('Ymd') . '-' . strtoupper(Str::random(6));
 
             $order = Order::create([
                 'order_id' => $orderId,
@@ -404,12 +377,10 @@ class PaymentController extends Controller
                     'price' => $ci->product->price,
                 ]);
 
-                // decrement stock
                 DB::table('products')->where('id', $ci->product_id)->decrement('stock', $ci->quantity);
             }
 
-            // create delivery entry
-            $verificationCode = strtoupper(\Illuminate\Support\Str::random(6));
+            $verificationCode = strtoupper(Str::random(6));
             Delivery::create([
                 'order_id' => $order->id,
                 'delivery_person' => null,
@@ -417,17 +388,14 @@ class PaymentController extends Controller
                 'verification_code' => $verificationCode
             ]);
 
-            // delete cart items
             $cart->items()->delete();
 
-            // create notification
             Notification::create([
                 'user_id' => $user->id,
                 'title' => 'Order Placed',
                 'message' => "Your order #{$order->order_id} has been placed (admin-approved payment)."
             ]);
 
-            // attach order id to payment.meta so client can detect it
             $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
             $meta['order_id'] = $order->order_id;
             $payment->meta = $meta;
