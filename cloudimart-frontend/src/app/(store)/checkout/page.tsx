@@ -56,12 +56,15 @@ export default function CheckoutPage() {
   const [userPayments, setUserPayments] = useState<any[]>([]);
   const [loadingPayments, setLoadingPayments] = useState(false);
 
+  // Verification TTL (1 hour)
+  const VERIFICATION_TTL_MS = 1000 * 60 * 60;
+
   useEffect(() => {
     (async () => {
       // Load cart first (so we compute a cartHash), then locations/user, then payments filtered by cartHash
       const computed = await loadCart();
       await loadLocationsAndUser();
-      await fetchPayments(computed ?? null);
+      await fetchPayments(computed ?? null, { excludeOrdered: true, onlyPending: true });
     })();
 
     return () => {
@@ -125,12 +128,17 @@ export default function CheckoutPage() {
   };
 
   // Fetch user's payment uploads & statuses (optionally filtered by cartHash)
-  const fetchPayments = async (filterHash: string | null = null) => {
+  const fetchPayments = async (
+    filterHash: string | null = null,
+    opts: { excludeOrdered?: boolean; onlyPending?: boolean } = { excludeOrdered: true, onlyPending: true }
+  ) => {
     setLoadingPayments(true);
     try {
       const effectiveHash = filterHash ?? cartHash ?? null;
       const params: any = {};
       if (effectiveHash) params.cart_hash = effectiveHash;
+      if (opts.excludeOrdered) params.exclude_ordered = 1;
+      if (opts.onlyPending) params.only_pending = 1;
       const res = await client.get('/api/payments', { params });
       // safe extraction: prefer res.data.data then res.data
       const payload = res.data?.data ?? res.data ?? [];
@@ -156,12 +164,46 @@ export default function CheckoutPage() {
     try {
       const u = await client.get('/api/user');
       const user = u.data?.user ?? u.data ?? null;
-      if (user && user.location_id) {
-        setSelectedLocationId(user.location_id);
-      } else if (!selectedLocationId && locations.length > 0) {
-        setSelectedLocationId(locations[0].id);
+
+      if (user) {
+        // restore selected location from user if present
+        if (user.location_id) setSelectedLocationId(user.location_id);
+
+        // restore server-trusted verification
+        if (user.delivery_verified_at) {
+          const verifiedAt = new Date(user.delivery_verified_at).getTime();
+          const now = Date.now();
+          // parse meta (could be array/object or JSON string)
+          const meta =
+            user.delivery_verified_meta ??
+            (typeof user.delivery_verified_meta === 'string' ? JSON.parse(user.delivery_verified_meta) : null);
+
+          // 1) TTL check
+          if (now - verifiedAt <= VERIFICATION_TTL_MS) {
+            // 2) Optionally check cart_hash matches (recommended)
+            const savedCartHash = meta?.cart_hash ?? null;
+            if (!savedCartHash || savedCartHash === cartHash) {
+              setVerified(true);
+              if (meta?.lat && meta?.lng) setGps({ lat: Number(meta.lat), lng: Number(meta.lng) });
+              if (meta?.detected_location?.name)
+                setDetectedArea({ id: meta?.detected_location?.id, name: meta?.detected_location?.name });
+            } else {
+              // cart changed — clear server verification client-side
+              setVerified(false);
+            }
+          } else {
+            // expired
+            setVerified(false);
+          }
+        }
+      } else {
+        // fallback if user not found
+        if (!selectedLocationId && locations.length > 0) {
+          setSelectedLocationId(locations[0].id);
+        }
       }
     } catch (e) {
+      // silent fallback
       if (!selectedLocationId && locations.length > 0) {
         setSelectedLocationId(locations[0].id);
       }
@@ -175,7 +217,12 @@ export default function CheckoutPage() {
     setVerified(false);
 
     try {
-      const res = await client.post('/api/locations/validate', { lat, lng, location_id });
+      // include cart_hash so backend can persist verification for this cart
+      const payload: any = { lat, lng };
+      if (location_id) payload.location_id = location_id;
+      if (cartHash) payload.cart_hash = cartHash;
+
+      const res = await client.post('/api/locations/validate', payload);
       const data = res.data;
       const insideAny = !!data?.inside_any_area;
       const detected = data?.detected_location ?? null;
@@ -354,8 +401,8 @@ export default function CheckoutPage() {
 
           if (orderId) {
             setModal({ show: true, title: 'Payment confirmed', body: `Payment confirmed and order created: ${orderId}` });
-            // refresh payments and cart
-            await fetchPayments();
+            // refresh payments and cart (use cartHash + filters)
+            await fetchPayments(cartHash, { excludeOrdered: true, onlyPending: true });
             await loadCart();
             // stop polling
             if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
@@ -424,7 +471,7 @@ export default function CheckoutPage() {
       setShowPaymentModal(false);
 
       // refresh payments but filtered to cartHash
-      fetchPayments(cartHash);
+      fetchPayments(cartHash, { excludeOrdered: true, onlyPending: true });
 
       return { checkout_url: checkoutUrl, tx_ref: txRef };
     } catch (err: any) {
@@ -460,7 +507,7 @@ export default function CheckoutPage() {
       setShowPaymentModal(false);
 
       // refresh list for this cart
-      fetchPayments(cartHash);
+      fetchPayments(cartHash, { excludeOrdered: true, onlyPending: true });
 
       return { tx_ref: txRef };
     } catch (err: any) {
@@ -518,7 +565,7 @@ export default function CheckoutPage() {
 
         // refresh cart & payments
         await loadCart();
-        fetchPayments();
+        await fetchPayments(null, { excludeOrdered: true, onlyPending: true });
       } else {
         setModal({ show: true, title: 'Order failed', body: res.data?.message ?? 'Failed to place order' });
       }

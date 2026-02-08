@@ -19,7 +19,7 @@ class Product extends Model
         'image_url',
         'stock',
     ];
-
+ 
     // Type casting
     protected $casts = [
         'price' => 'decimal:2',

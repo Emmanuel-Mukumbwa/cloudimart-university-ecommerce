@@ -45,7 +45,7 @@ class ProductController extends Controller
             ]);
     }
 
-    public function show($id)
+    public function show($id) 
     {
         $product = Product::with('category')->findOrFail($id);
         return new ProductResource($product);
