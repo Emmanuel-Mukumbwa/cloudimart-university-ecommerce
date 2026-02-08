@@ -8,6 +8,8 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use App\Models\Payment;
 use Exception;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage; // optional - for clarity if you want to use Storage facade
 
 class PaymentController extends Controller
 {
@@ -48,21 +50,17 @@ class PaymentController extends Controller
 
         try {
             $secretKey = config('services.paychangu.secret');
- 
+
             $payload = [
                 'amount' => $request->amount,
                 'currency' => 'MWK',
-                // Make sure this route name exists in api.php (named below)
-                //'callback_url' => route('api.payment.callback'),
                 'callback_url' => config('app.url') . '/api/payment/callback',
-                // Optional: frontend return URL after user completes checkout
-                'return_url' => config('app.url'), // or env('FRONTEND_URL')
+                'return_url' => config('app.url'),
                 'tx_ref' => $txRef,
                 'first_name' => auth()->user()->name ?? null,
                 'last_name' => null,
                 'email' => auth()->user()->email ?? null,
                 'network' => $request->network,
-                // normalize mobile to international (you already do this elsewhere)
                 'phone_number' => preg_replace('/^0/', '265', $request->mobile),
                 'customization' => [
                     'title' => 'Order Payment',
@@ -104,8 +102,9 @@ class PaymentController extends Controller
 
     /**
      * GET /api/payment/status?tx_ref=...
-     * Returns { status: 'pending'|'success'|'failed', payment: {...} }
-     * This checks DB first; if still pending, calls PayChangu verify endpoint.
+     * Single consolidated status method:
+     * - returns local status immediately if final
+     * - otherwise calls PayChangu verify endpoint to refresh status
      */
     public function status(Request $request)
     {
@@ -124,7 +123,7 @@ class PaymentController extends Controller
             return response()->json(['status' => $payment->status, 'payment' => $payment], 200);
         }
 
-        // Otherwise call PayChangu verify endpoint
+        // Otherwise call PayChangu verify endpoint and update if necessary
         try {
             $secretKey = config('services.paychangu.secret');
 
@@ -171,7 +170,7 @@ class PaymentController extends Controller
 
         $txRef = $request->input('tx_ref') ?? $request->input('transaction_reference') ?? null;
         $status = $request->input('status') ?? null;
-        $providerRef = $request->input('transaction_id') ?? $request->input('transaction_id') ?? null;
+        $providerRef = $request->input('transaction_id') ?? $request->input('transactionId') ?? null;
 
         if (! $txRef) {
             return response()->json(['message' => 'tx_ref missing'], 400);
@@ -276,22 +275,6 @@ class PaymentController extends Controller
     }
 
     /**
-     * GET /api/payment/status?tx_ref=...
-     * Return status and payment object (unchanged, but include meta.order_id if present)
-     */
-    public function status(Request $request)
-    {
-        $txRef = $request->query('tx_ref') ?? $request->input('tx_ref');
-        if (empty($txRef)) return response()->json(['message' => 'tx_ref required'], 400);
-
-        $payment = Payment::where('tx_ref', $txRef)->first();
-        if (! $payment) return response()->json(['message' => 'Payment not found'], 404);
-
-        // return status + payment; payment may include meta.order_id if order created
-        return response()->json(['status' => $payment->status, 'payment' => $payment], 200);
-    }
-
-    /**
      * Admin: Approve a manual payment / mark as success and auto-place order
      * POST /api/admin/payments/{id}/approve
      *
@@ -339,7 +322,7 @@ class PaymentController extends Controller
             }
 
             // fetch cart for user
-            $cart = Cart::where('user_id', $user->id)->with('items.product')->first();
+            $cart = \App\Models\Cart::where('user_id', $user->id)->with('items.product')->first();
             if (! $cart || $cart->items->isEmpty()) {
                 // no cart — still mark payment success but cannot auto-place
                 $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
@@ -368,7 +351,6 @@ class PaymentController extends Controller
             }
 
             // 3) stock checks and order creation (very similar to CheckoutController::placeOrder)
-            // lock product rows while checking/decrementing
             $insufficient = [];
             foreach ($cart->items as $ci) {
                 $productRow = DB::table('products')->where('id', $ci->product_id)->lockForUpdate()->first();
@@ -397,7 +379,7 @@ class PaymentController extends Controller
             }
 
             // Create order id
-            $orderId = 'ORD-' . date('Ymd') . '-' . strtoupper(Str::random(6));
+            $orderId = 'ORD-' . date('Ymd') . '-' . strtoupper(\Illuminate\Support\Str::random(6));
 
             $order = Order::create([
                 'order_id' => $orderId,
@@ -421,7 +403,7 @@ class PaymentController extends Controller
             }
 
             // create delivery entry
-            $verificationCode = strtoupper(Str::random(6));
+            $verificationCode = strtoupper(\Illuminate\Support\Str::random(6));
             Delivery::create([
                 'order_id' => $order->id,
                 'delivery_person' => null,
@@ -454,306 +436,4 @@ class PaymentController extends Controller
             return response()->json(['message' => 'Failed to approve payment', 'error' => $e->getMessage()], 500);
         }
     }
-
-}
-
-
-adminApprove() is idempotent: if an order already exists for the tx_ref, it returns it.
-
-When creating order, it attaches order_id into payment.meta so frontend polling can pick it up after admin approves.
-
-
-
-
-<?php
-
-namespace App\Http\Controllers\Api;
-
-use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
-use App\Models\User;
-use App\Models\Product;
-use App\Models\Category;
-use App\Models\Order;
-use App\Models\OrderItem;
-use App\Models\Payment;
-use App\Models\Delivery;
-use App\Models\Cart;
-use App\Models\Notification;
-use App\Models\Location;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Validation\Rule;
-use Illuminate\Support\Str;
-use Exception;
-
-class AdminController extends Controller
-{
-    /**
-     * Basic admin guard inside controller (we're not using route middleware).
-     */
-    protected function ensureAdmin($user)
-    {
-        if (! $user || $user->role !== 'admin') {
-            abort(response()->json(['message' => 'Forbidden — admin only'], 403));
-        }
-    }
-
-    /**
-     * GET /api/admin/dashboard
-     * (existing code unchanged — omitted here for brevity in this display)
-     */
-    public function dashboard(Request $request)
-    {
-        $user = $request->user();
-        $this->ensureAdmin($user);
-
-        try {
-            // users by role
-            $usersByRole = User::select('role', DB::raw('count(*) as count'))
-                ->groupBy('role')
-                ->pluck('count', 'role')
-                ->toArray();
-
-            // orders summary
-            $ordersTotal = Order::count();
-            $ordersPending = Order::where('status', 'pending')->count();
-            $ordersPendingDelivery = Order::where('status', 'pending_delivery')->count();
-            $ordersDelivered = Order::where('status', 'delivered')->count();
-
-            // payments summary
-            $paymentsTotalCollected = (float) Payment::where('status', 'success')->sum('amount');
-
-            // top selling products
-            $topProducts = DB::table('order_items')
-                ->select('products.id','products.name', DB::raw('SUM(order_items.quantity) as total_qty'))
-                ->join('products', 'order_items.product_id', '=', 'products.id')
-                ->groupBy('products.id','products.name')
-                ->orderByDesc('total_qty')
-                ->limit(5)
-                ->get();
-
-            // recent orders (5)
-            $recentOrders = Order::with(['user:id,name,phone_number','items.product:id,name,price'])
-                ->orderBy('created_at', 'desc')
-                ->limit(5)
-                ->get();
-
-            // pending deliveries
-            $pendingDeliveries = Order::whereIn('status', ['pending', 'pending_delivery'])
-                ->with(['user:id,name,phone_number','items.product:id,name,price'])
-                ->orderBy('created_at', 'asc')
-                ->get();
-
-            // failed payments (recent 10)
-            $failedPayments = Payment::where('status', 'failed')
-                ->orderBy('created_at', 'desc')
-                ->limit(10)
-                ->get();
-
-            return response()->json([
-                'users_by_role' => $usersByRole,
-                'orders' => [
-                    'total' => $ordersTotal,
-                    'pending' => $ordersPending,
-                    'pending_delivery' => $ordersPendingDelivery,
-                    'delivered' => $ordersDelivered,
-                ],
-                'payments' => [
-                    'collected' => $paymentsTotalCollected,
-                ],
-                'top_products' => $topProducts,
-                'recent_orders' => $recentOrders,
-                'pending_deliveries' => $pendingDeliveries,
-                'failed_payments' => $failedPayments,
-            ]);
-        } catch (\Throwable $e) {
-            Log::error('Admin.dashboard error', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
-            return response()->json(['message' => 'Failed to load admin dashboard'], 500);
-        }
-    }
-
-    /* ... existing user/product/order methods unchanged ... */
-
-    /**
-     * GET /api/admin/payments
-     * Payments listing (admin). NOW includes user relation for UI convenience.
-     */
-    public function payments(Request $request)
-    {
-        $this->ensureAdmin($request->user());
-
-        $q = Payment::with(['user:id,name,email'])->orderBy('created_at','desc');
-        if ($request->has('status')) $q->where('status', $request->get('status'));
-        $payments = $q->paginate(25);
-
-        return response()->json($payments);
-    }
-
-    /**
-     * POST /api/admin/payments/{id}/approve
-     * Admin approves a payment (manual proof). This:
-     *  - marks payment.status => 'success'
-     *  - idempotently attempts to auto-create an order for the payment->user using their cart
-     *  - if successful, sets payment.meta.order_id and returns the created order
-     *
-     * WARNING: this endpoint must be protected by admin auth (we check here).
-     */
-    public function approvePayment(Request $request, $id)
-    {
-        $this->ensureAdmin($request->user());
-
-        $payment = Payment::find($id);
-        if (! $payment) {
-            return response()->json(['message' => 'Payment not found'], 404);
-        }
-
-        // If already approved, return the payment (idempotent)
-        if ($payment->status === 'success') {
-            return response()->json(['message' => 'Payment already approved', 'payment' => $payment], 200);
-        }
-
-        DB::beginTransaction();
-        try {
-            // 1) Mark payment as success
-            $payment->status = 'success';
-            $payment->save();
-
-            // 2) Auto-place order for the user based on their cart (idempotent)
-            $user = $payment->user;
-            if (! $user) {
-                DB::commit();
-                return response()->json(['message' => 'Payment approved but payment has no associated user'], 200);
-            }
-
-            // If an order already exists for this payment, attach and return
-            $existing = Order::where('payment_ref', $payment->tx_ref)->first();
-            if ($existing) {
-                $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
-                if (empty($meta['order_id'])) {
-                    $meta['order_id'] = $existing->order_id;
-                    $payment->meta = $meta;
-                    $payment->save();
-                }
-                DB::commit();
-                return response()->json(['message' => 'Payment approved; existing order found', 'order' => $existing], 200);
-            }
-
-            // fetch cart for user
-            $cart = Cart::where('user_id', $user->id)->with('items.product')->first();
-            if (! $cart || $cart->items->isEmpty()) {
-                // no cart — still mark payment success but cannot auto-place
-                $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
-                $meta['note'] = ($meta['note'] ?? '') . ' | No cart found to auto-place order';
-                $payment->meta = $meta;
-                $payment->save();
-                DB::commit();
-                return response()->json(['message' => 'Payment marked success but user cart empty; manual placement required.'], 200);
-            }
-
-            // verify amount matches cart total
-            $total = 0;
-            foreach ($cart->items as $ci) {
-                $total += ($ci->product->price * $ci->quantity);
-            }
-
-            if (floatval($payment->amount) != floatval($total)) {
-                $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
-                $meta['amount_mismatch'] = ['payment' => $payment->amount, 'cart_total' => $total];
-                $payment->meta = $meta;
-                $payment->save();
-
-                DB::rollBack();
-                return response()->json(['message' => 'Amount mismatch between payment and cart total. Auto-place aborted.', 'meta' => $meta], 422);
-            }
-
-            // stock checks (with locks)
-            $insufficient = [];
-            foreach ($cart->items as $ci) {
-                $productRow = DB::table('products')->where('id', $ci->product_id)->lockForUpdate()->first();
-                if (! $productRow) {
-                    DB::rollBack();
-                    return response()->json(['success' => false, 'message' => "Product (ID {$ci->product_id}) not found"], 400);
-                }
-
-                $currentStock = intval($productRow->stock ?? 0);
-                if ($currentStock < intval($ci->quantity)) {
-                    $insufficient[] = [
-                        'product_id' => $ci->product_id,
-                        'available' => $currentStock,
-                        'requested' => intval($ci->quantity),
-                    ];
-                }
-            }
-
-            if (!empty($insufficient)) {
-                DB::rollBack();
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Some items are out of stock',
-                    'items' => $insufficient
-                ], 409);
-            }
-
-            // Create order id & record
-            $orderId = 'ORD-' . date('Ymd') . '-' . strtoupper(Str::random(6));
-
-            $order = Order::create([
-                'order_id' => $orderId,
-                'user_id' => $user->id,
-                'total' => $total,
-                'delivery_address' => data_get($payment->meta, 'delivery_address') ?? null,
-                'status' => 'pending_delivery',
-                'payment_ref' => $payment->tx_ref,
-            ]);
-
-            // create order items & decrement stock
-            foreach ($cart->items as $ci) {
-                OrderItem::create([
-                    'order_id' => $order->id,
-                    'product_id' => $ci->product_id,
-                    'quantity' => $ci->quantity,
-                    'price' => $ci->product->price,
-                ]);
-
-                DB::table('products')->where('id', $ci->product_id)->decrement('stock', $ci->quantity);
-            }
-
-            // create delivery record
-            $verificationCode = strtoupper(Str::random(6));
-            Delivery::create([
-                'order_id' => $order->id,
-                'delivery_person' => null,
-                'status' => 'pending',
-                'verification_code' => $verificationCode
-            ]);
-
-            // clear cart items
-            $cart->items()->delete();
-
-            // notify user (in-app)
-            Notification::create([
-                'user_id' => $user->id,
-                'title' => 'Order Placed',
-                'message' => "Your order #{$order->order_id} has been placed (admin-approved payment)."
-            ]);
-
-            // attach order_id to payment.meta
-            $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
-            $meta['order_id'] = $order->order_id;
-            $payment->meta = $meta;
-            $payment->save();
-
-            DB::commit();
-
-            return response()->json(['message' => 'Payment approved and order created', 'order' => $order], 200);
-        } catch (Exception $e) {
-            DB::rollBack();
-            Log::error('admin.approvePayment error: ' . $e->getMessage());
-            return response()->json(['message' => 'Failed to approve payment', 'error' => $e->getMessage()], 500);
-        }
-    }
-
-    /* ... keep other admin methods (notify, locations etc.) unchanged ... */
 }
