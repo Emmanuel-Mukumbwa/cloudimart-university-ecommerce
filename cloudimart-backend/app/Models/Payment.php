@@ -3,11 +3,25 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Payment extends Model
 {
+    use HasFactory;
+
+    /**
+     * Table name
+     *
+     * @var string
+     */
     protected $table = 'payments';
 
+    /**
+     * Mass assignable attributes
+     *
+     * @var array
+     */
     protected $fillable = [
         'user_id',
         'tx_ref',
@@ -18,10 +32,26 @@ class Payment extends Model
         'currency',
         'status',
         'meta',
+        'proof_url', // if you added this column in the migration
     ];
 
+    /**
+     * Casts
+     *
+     * @var array
+     */
     protected $casts = [
         'meta' => 'array',
         'amount' => 'decimal:2',
     ];
+
+    /**
+     * Payment belongs to a user.
+     *
+     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo
+     */
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'user_id');
+    }
 }

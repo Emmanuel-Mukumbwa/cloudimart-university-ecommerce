@@ -11,6 +11,7 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Payment;
 use App\Models\Delivery;
+use App\Models\Cart;
 use App\Models\Transaction;
 use App\Models\Notification;
 use App\Models\Location;
@@ -18,6 +19,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Str;
+use Exception;
 
 class AdminController extends Controller
 {
@@ -113,55 +116,55 @@ class AdminController extends Controller
     }
 
     /**
- * GET /api/admin/users
- * Users listing (admin). Supports:
- *  - ?role=admin|user|delivery (filters by role)
- *  - ?is_active=1|0 (filters by active state)
- *  - ?exclude_admin=1 (exclude admin accounts from results)
- *  - pagination
- */
-public function users(Request $request)
-{
-    $this->ensureAdmin($request->user());
+     * GET /api/admin/users
+     * Users listing (admin). Supports:
+     *  - ?role=admin|user|delivery (filters by role)
+     *  - ?is_active=1|0 (filters by active state)
+     *  - ?exclude_admin=1 (exclude admin accounts from results)
+     *  - pagination
+     */
+    public function users(Request $request)
+    {
+        $this->ensureAdmin($request->user());
 
-    $role = $request->query('role', null);
-    $isActive = $request->query('is_active', null);
-    $excludeAdmin = $request->query('exclude_admin', false);
+        $role = $request->query('role', null);
+        $isActive = $request->query('is_active', null);
+        $excludeAdmin = $request->query('exclude_admin', false);
 
-    // Select fields useful for the admin UI and include orders_count as a subquery
-    $q = User::query()
-        ->select(
-            'users.id',
-            'users.name',
-            'users.email',
-            'users.phone_number',
-            'users.role',
-            'users.is_active',
-            'users.created_at',
-            'users.updated_at',
-            'users.location_id',
-            'users.latitude',
-            'users.longitude',
-            'users.location_verified_at',
-            DB::raw('(SELECT COUNT(*) FROM orders WHERE orders.user_id = users.id) as orders_count')
-        )
-        ->with(['location:id,name']); // eager-load location name
+        // Select fields useful for the admin UI and include orders_count as a subquery
+        $q = User::query()
+            ->select(
+                'users.id',
+                'users.name',
+                'users.email',
+                'users.phone_number',
+                'users.role',
+                'users.is_active',
+                'users.created_at',
+                'users.updated_at',
+                'users.location_id',
+                'users.latitude',
+                'users.longitude',
+                'users.location_verified_at',
+                DB::raw('(SELECT COUNT(*) FROM orders WHERE orders.user_id = users.id) as orders_count')
+            )
+            ->with(['location:id,name']); // eager-load location name
 
-    if ($role) {
-        $q->where('role', $role);
+        if ($role) {
+            $q->where('role', $role);
+        }
+
+        if (!is_null($isActive)) {
+            $q->where('is_active', intval($isActive));
+        }
+
+        if ($excludeAdmin) {
+            $q->where('role', '!=', 'admin');
+        }
+
+        $users = $q->orderBy('created_at','desc')->paginate(20);
+        return response()->json($users);
     }
-
-    if (!is_null($isActive)) {
-        $q->where('is_active', intval($isActive));
-    }
-
-    if ($excludeAdmin) {
-        $q->where('role', '!=', 'admin');
-    }
-
-    $users = $q->orderBy('created_at','desc')->paginate(20);
-    return response()->json($users);
-}
 
     /**
      * POST /api/admin/users
@@ -323,16 +326,181 @@ public function users(Request $request)
 
     /**
      * GET /api/admin/payments
-     * Payments listing
+     * Payments listing (admin). Includes user relation for UI convenience.
      */
     public function payments(Request $request)
     {
         $this->ensureAdmin($request->user());
 
-        $q = Payment::orderBy('created_at','desc');
+        $q = Payment::with(['user:id,name,email'])->orderBy('created_at','desc');
         if ($request->has('status')) $q->where('status', $request->get('status'));
         $payments = $q->paginate(25);
+
         return response()->json($payments);
+    }
+
+    /**
+     * POST /api/admin/payments/{id}/approve
+     * Admin approves a payment (manual proof). This:
+     *  - marks payment.status => 'success'
+     *  - idempotently attempts to auto-create an order for the payment->user using their cart
+     *  - if successful, sets payment.meta.order_id and returns the created order
+     *
+     * WARNING: this endpoint must be protected by admin auth (we check here).
+     */
+    public function approvePayment(Request $request, $id)
+    {
+        $this->ensureAdmin($request->user());
+
+        $payment = Payment::find($id);
+        if (! $payment) {
+            return response()->json(['message' => 'Payment not found'], 404);
+        }
+
+        // If already approved, return the payment (idempotent)
+        if ($payment->status === 'success') {
+            return response()->json(['message' => 'Payment already approved', 'payment' => $payment], 200);
+        }
+
+        DB::beginTransaction();
+        try {
+            // 1) Mark payment as success
+            $payment->status = 'success';
+            $payment->save();
+
+            // 2) Auto-place order for the user based on their cart (idempotent)
+            $user = $payment->user;
+            if (! $user) {
+                DB::commit();
+                return response()->json(['message' => 'Payment approved but payment has no associated user'], 200);
+            }
+
+            // If an order already exists for this payment, attach and return
+            $existing = Order::where('payment_ref', $payment->tx_ref)->first();
+            if ($existing) {
+                $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
+                if (empty($meta['order_id'])) {
+                    $meta['order_id'] = $existing->order_id;
+                    $payment->meta = $meta;
+                    $payment->save();
+                }
+                DB::commit();
+                return response()->json(['message' => 'Payment approved; existing order found', 'order' => $existing], 200);
+            }
+
+            // fetch cart for user
+            $cart = Cart::where('user_id', $user->id)->with('items.product')->first();
+            if (! $cart || $cart->items->isEmpty()) {
+                // no cart — still mark payment success but cannot auto-place
+                $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
+                $meta['note'] = ($meta['note'] ?? '') . ' | No cart found to auto-place order';
+                $payment->meta = $meta;
+                $payment->save();
+                DB::commit();
+                return response()->json(['message' => 'Payment marked success but user cart empty; manual placement required.'], 200);
+            }
+
+            // verify amount matches cart total
+            $total = 0;
+            foreach ($cart->items as $ci) {
+                $total += ($ci->product->price * $ci->quantity);
+            }
+
+            if (floatval($payment->amount) != floatval($total)) {
+                $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
+                $meta['amount_mismatch'] = ['payment' => $payment->amount, 'cart_total' => $total];
+                $payment->meta = $meta;
+                $payment->save();
+
+                DB::rollBack();
+                return response()->json(['message' => 'Amount mismatch between payment and cart total. Auto-place aborted.', 'meta' => $meta], 422);
+            }
+
+            // stock checks (with locks)
+            $insufficient = [];
+            foreach ($cart->items as $ci) {
+                $productRow = DB::table('products')->where('id', $ci->product_id)->lockForUpdate()->first();
+                if (! $productRow) {
+                    DB::rollBack();
+                    return response()->json(['success' => false, 'message' => "Product (ID {$ci->product_id}) not found"], 400);
+                }
+
+                $currentStock = intval($productRow->stock ?? 0);
+                if ($currentStock < intval($ci->quantity)) {
+                    $insufficient[] = [
+                        'product_id' => $ci->product_id,
+                        'available' => $currentStock,
+                        'requested' => intval($ci->quantity),
+                    ];
+                }
+            }
+
+            if (!empty($insufficient)) {
+                DB::rollBack();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Some items are out of stock',
+                    'items' => $insufficient
+                ], 409);
+            }
+
+            // Create order id & record
+            $orderId = 'ORD-' . date('Ymd') . '-' . strtoupper(Str::random(6));
+
+            $order = Order::create([
+                'order_id' => $orderId,
+                'user_id' => $user->id,
+                'total' => $total,
+                'delivery_address' => data_get($payment->meta, 'delivery_address') ?? null,
+                'status' => 'pending_delivery',
+                'payment_ref' => $payment->tx_ref,
+            ]);
+
+            // create order items & decrement stock
+            foreach ($cart->items as $ci) {
+                OrderItem::create([
+                    'order_id' => $order->id,
+                    'product_id' => $ci->product_id,
+                    'quantity' => $ci->quantity,
+                    'price' => $ci->product->price,
+                ]);
+
+                DB::table('products')->where('id', $ci->product_id)->decrement('stock', $ci->quantity);
+            }
+
+            // create delivery record
+            $verificationCode = strtoupper(Str::random(6));
+            Delivery::create([
+                'order_id' => $order->id,
+                'delivery_person' => null,
+                'status' => 'pending',
+                'verification_code' => $verificationCode
+            ]);
+
+            // clear cart items
+            $cart->items()->delete();
+
+            // notify user (in-app)
+            Notification::create([
+                'user_id' => $user->id,
+                'title' => 'Order Placed',
+                'message' => "Your order #{$order->order_id} has been placed (admin-approved payment)."
+            ]);
+
+            // attach order_id to payment.meta
+            $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
+            $meta['order_id'] = $order->order_id;
+            $payment->meta = $meta;
+            $payment->save();
+
+            DB::commit();
+
+            return response()->json(['message' => 'Payment approved and order created', 'order' => $order], 200);
+        } catch (Exception $e) {
+            DB::rollBack();
+            Log::error('admin.approvePayment error: ' . $e->getMessage());
+            return response()->json(['message' => 'Failed to approve payment', 'error' => $e->getMessage()], 500);
+        }
     }
 
     /**
@@ -382,3 +550,4 @@ public function users(Request $request)
         return response()->json($locations);
     }
 }
+

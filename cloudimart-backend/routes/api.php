@@ -71,6 +71,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // --- 💳 Payments --- //
     Route::post('/payment/initiate', [PaymentController::class, 'initiate']);
     Route::get('/payment/status', [PaymentController::class, 'status']);
+    Route::get('/payments', [PaymentController::class, 'index']);
+    Route::post('/payment/upload-proof', [PaymentController::class, 'uploadProof']);
+    //Route::get('/payment/status', [PaymentController::class, 'status']);
 
     // --- 🧾 Checkout + Orders --- //
     Route::post('/checkout/validate-location', [CheckoutController::class, 'validateLocation']);
@@ -107,6 +110,7 @@ Route::prefix('admin')->group(function () {
     Route::post('/orders/{id}/status', [AdminController::class, 'updateOrderStatus']);
 
     Route::get('/payments', [AdminController::class, 'payments']);
+     Route::post('/payments/{id}/approve', [PaymentController::class, 'adminApprove']); 
     Route::post('/notify', [AdminController::class, 'notify']);
     Route::get('/locations', [AdminController::class, 'locations']);
 });
