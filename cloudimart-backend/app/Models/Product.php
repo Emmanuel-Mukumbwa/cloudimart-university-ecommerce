@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Storage;
 
 class Product extends Model
 {
@@ -25,12 +26,26 @@ class Product extends Model
         'stock' => 'integer',
     ];
 
+    // Append derived attribute
+    protected $appends = ['image_url_full'];
+
     /**
      * Category relationship
      */
     public function category()
     {
         return $this->belongsTo(Category::class);
+    }
+
+    /**
+     * Absolute URL to image (null if none)
+     */
+    public function getImageUrlFullAttribute()
+    {
+        if (empty($this->image_url)) return null;
+
+        // asset('storage/...') uses APP_URL
+        return asset('storage/' . ltrim($this->image_url, '/'));
     }
 
     /**
@@ -49,9 +64,6 @@ class Product extends Model
         return $this->hasMany(CartItem::class);
     }
 
-    /**
-     * Scope: simple search by name/description
-     */
     public function scopeSearch($query, ?string $q)
     {
         if (!$q) return $query;
@@ -61,9 +73,6 @@ class Product extends Model
         });
     }
 
-    /**
-     * Scope: filter by category id or slug
-     */
     public function scopeByCategory($query, $category)
     {
         if (!$category) return $query;

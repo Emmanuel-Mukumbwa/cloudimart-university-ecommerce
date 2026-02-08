@@ -23,7 +23,7 @@ export default function ProductCard({ product }: { product: any }) {
     if (!token) {
       setShowLoginModal(true);
       return;
-    }
+    } 
 
     try {
       setAdding(true);

@@ -135,7 +135,7 @@ export default function ProductsPage() {
               className="btn btn-outline-secondary btn-sm"
             >
               Previous
-            </button>
+            </button> 
 
             <div className="small text-muted">
               Page {meta.current_page} of {meta.last_page} · {meta.total} items
