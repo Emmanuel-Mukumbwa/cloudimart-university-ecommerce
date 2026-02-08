@@ -32,7 +32,7 @@ class Payment extends Model
         'currency',
         'status',
         'meta',
-        'proof_url', // if you added this column in the migration
+        'proof_url', 
     ];
 
     /**
