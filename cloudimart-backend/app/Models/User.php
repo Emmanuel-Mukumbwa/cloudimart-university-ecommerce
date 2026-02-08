@@ -25,6 +25,8 @@ class User extends Authenticatable
         'longitude',
         'role',
         'is_active',
+        // you could include delivery fields if you plan to mass assign them anywhere:
+        // 'delivery_verified_at', 'delivery_verified_meta',
     ];
 
     /**
@@ -34,13 +36,16 @@ class User extends Authenticatable
         'password',
         'remember_token',
     ];
-
+ 
     /**
      * The attributes that should be cast.
      */
     protected $casts = [
         'email_verified_at' => 'datetime',
         'location_verified_at' => 'datetime',
+        // NEW CASTS:
+        'delivery_verified_at' => 'datetime',
+        'delivery_verified_meta' => 'array',
     ];
 
     /**
