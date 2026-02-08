@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use Illuminate\Support\Facades\Storage;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\User;
@@ -238,7 +239,7 @@ class AdminController extends Controller
         return response()->json(['success' => true, 'message' => 'User suspended', 'user' => $user]);
     }
 
-    /**
+        /**
      * GET /api/admin/products
      * Products listing (paginated)
      */
@@ -256,12 +257,14 @@ class AdminController extends Controller
     /**
      * POST /api/admin/products
      * Create / update product
+     * Accepts multipart/form-data (optional image file named 'image') or JSON (image_url string)
      */
     public function saveProduct(Request $request)
     {
         $this->ensureAdmin($request->user());
 
-        $data = $request->validate([
+        // allow both multipart and json: validation will adapt
+        $rules = [
             'id' => 'nullable|exists:products,id',
             'name' => 'required|string',
             'description' => 'nullable|string',
@@ -269,15 +272,58 @@ class AdminController extends Controller
             'category_id' => 'required|exists:categories,id',
             'stock' => 'required|integer|min:0',
             'image_url' => 'nullable|string',
-        ]);
+            'image' => 'nullable|image|max:5120', // 5MB
+        ];
 
+        $data = $request->validate($rules);
+
+        // If file uploaded, store it
+        $storedPath = null;
+        if ($request->hasFile('image')) {
+            try {
+                $storedPath = $request->file('image')->store('products', 'public'); // returns e.g. products/xxx.png
+            } catch (Exception $e) {
+                Log::error('Product image store failed: ' . $e->getMessage());
+                return response()->json(['message' => 'Failed to store image'], 500);
+            }
+        }
+
+        // If updating
         if (!empty($data['id'])) {
             $prod = Product::findOrFail($data['id']);
+
+            // If new image uploaded, delete old image file (if exists)
+            if ($storedPath) {
+                if (!empty($prod->image_url)) {
+                    try {
+                        Storage::disk('public')->delete($prod->image_url);
+                    } catch (\Exception $e) {
+                        Log::warning('Failed to delete old product image: ' . $e->getMessage());
+                    }
+                }
+                $data['image_url'] = $storedPath;
+            } else {
+                // If no new file but image_url present in payload (string), keep it; otherwise leave existing image_url
+                if (!array_key_exists('image_url', $data) || $data['image_url'] === null) {
+                    // preserve existing
+                    unset($data['image_url']);
+                }
+            }
+
             $prod->update($data);
-            return response()->json(['success'=>true,'product'=>$prod]);
+            return response()->json(['success' => true, 'product' => $prod->fresh()], 200);
+        }
+
+        // Create new product
+        if ($storedPath) {
+            $data['image_url'] = $storedPath;
+        } else {
+            // allow creating without an image_url
+            $data['image_url'] = $data['image_url'] ?? null;
         }
 
         $prod = Product::create($data);
+
         return response()->json(['success'=>true,'product'=>$prod], 201);
     }
 
@@ -289,6 +335,16 @@ class AdminController extends Controller
         $this->ensureAdmin($request->user());
 
         $prod = Product::findOrFail($id);
+
+        // delete image file if present
+        if (!empty($prod->image_url)) {
+            try {
+                Storage::disk('public')->delete($prod->image_url);
+            } catch (\Exception $e) {
+                Log::warning('Failed to delete product image on product delete: ' . $e->getMessage());
+            }
+        }
+
         $prod->delete();
         return response()->json(['success'=>true,'message'=>'Product deleted']);
     }
