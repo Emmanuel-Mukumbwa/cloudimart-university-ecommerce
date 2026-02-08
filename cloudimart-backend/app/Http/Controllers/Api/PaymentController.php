@@ -198,7 +198,7 @@ class PaymentController extends Controller
 
     /**
      * GET /api/payments
-     * Supports ?cart_hash=... or ?tx_ref=...
+     * Supports ?cart_hash=... or ?tx_ref=... and ?exclude_ordered=1 and ?only_pending=1
      */
     public function index(Request $request)
     {
@@ -209,12 +209,26 @@ class PaymentController extends Controller
 
         $cartHash = $request->query('cart_hash');
         $txRef = $request->query('tx_ref');
+        $excludeOrdered = $request->query('exclude_ordered'); // e.g. 1
+        $onlyPending = $request->query('only_pending'); // e.g. 1
 
         if ($txRef) {
             $paymentsQuery->where('tx_ref', $txRef);
         } elseif ($cartHash) {
-            // assumes 'meta' is a JSON column
+            // filter by cart_hash in meta (assumes meta is JSON)
+            // JSON_EXTRACT returns null when key missing; equality will match exact string
             $paymentsQuery->whereRaw("JSON_EXTRACT(meta, '$.cart_hash') = ?", [$cartHash]);
+        }
+
+        if ($excludeOrdered) {
+            // exclude payments that already have an order_id in meta
+            // JSON_EXTRACT(meta, '$.order_id') IS NULL ensures only unassociated payments
+            $paymentsQuery->whereRaw("JSON_EXTRACT(meta, '$.order_id') IS NULL");
+        }
+
+        if ($onlyPending) {
+            // only include payments still pending (adjust array if you want pending+failed etc)
+            $paymentsQuery->where('status', 'pending');
         }
 
         $payments = $paymentsQuery->get();
