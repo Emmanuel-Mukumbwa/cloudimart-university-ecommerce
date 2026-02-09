@@ -7,6 +7,8 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Builder;
 
 class User extends Authenticatable
 {
@@ -25,8 +27,7 @@ class User extends Authenticatable
         'longitude',
         'role',
         'is_active',
-        // you could include delivery fields if you plan to mass assign them anywhere:
-        // 'delivery_verified_at', 'delivery_verified_meta',
+        // 'delivery_verified_at', 'delivery_verified_meta' if you want to mass assign them elsewhere
     ];
 
     /**
@@ -36,14 +37,13 @@ class User extends Authenticatable
         'password',
         'remember_token',
     ];
- 
+
     /**
      * The attributes that should be cast.
      */
     protected $casts = [
         'email_verified_at' => 'datetime',
         'location_verified_at' => 'datetime',
-        // NEW CASTS:
         'delivery_verified_at' => 'datetime',
         'delivery_verified_meta' => 'array',
     ];
@@ -54,6 +54,14 @@ class User extends Authenticatable
     public function location(): BelongsTo
     {
         return $this->belongsTo(Location::class);
+    }
+
+    /**
+     * Relationship: deliveries assigned to this user (as delivery person).
+     */
+    public function deliveriesAssigned(): HasMany
+    {
+        return $this->hasMany(Delivery::class, 'delivery_person_id');
     }
 
     /**
@@ -73,4 +81,15 @@ class User extends Authenticatable
     {
         return $this->role === 'user';
     }
+
+    /**
+     * Scope: returns only active users with role 'delivery'.
+     *
+     * Usage: User::deliveryPeople()->get();
+     */
+    public function scopeDeliveryPeople(Builder $query): Builder
+    {
+        return $query->where('role', 'delivery')->where('is_active', 1);
+    }
 }
+

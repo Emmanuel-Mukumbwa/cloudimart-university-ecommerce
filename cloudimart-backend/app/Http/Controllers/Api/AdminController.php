@@ -387,7 +387,7 @@ class AdminController extends Controller
     {
         $this->ensureAdmin($request->user());
 
-        $q = Order::with(['user:id,name,phone_number','items.product']);
+        $q = Order::with(['user:id,name,phone_number','items.product','delivery']);
         if ($request->has('status')) $q->where('status', $request->get('status'));
         $orders = $q->orderBy('created_at','desc')->paginate(20);
         return response()->json($orders);
@@ -408,6 +408,112 @@ class AdminController extends Controller
 
         return response()->json(['success' => true, 'order' => $order]);
     }
+
+    
+/**
+ * GET /api/admin/delivery-people
+ * Return list of users with role 'delivery'
+ */
+public function deliveryPeople(Request $request)
+{
+    $this->ensureAdmin($request->user());
+    $people = User::where('role','delivery')
+                  ->where('is_active',1)
+                  ->select('id','name','phone_number','email')
+                  ->orderBy('name','asc')
+                  ->get();
+    return response()->json(['data' => $people], 200);
+}
+
+/**
+ * POST /api/admin/deliveries/{id}/assign
+ * body: { delivery_person_id: <user id> }
+ */
+public function assignDelivery(Request $request, $id)
+{
+    $this->ensureAdmin($request->user());
+
+    $data = $request->validate([
+        'delivery_person_id' => 'required|exists:users,id',
+    ]);
+
+    $delivery = Delivery::findOrFail($id);
+    $deliveryPerson = User::findOrFail($data['delivery_person_id']);
+
+    // ensure selected user is a delivery person
+    if ($deliveryPerson->role !== 'delivery' || ! $deliveryPerson->is_active) {
+        return response()->json(['message' => 'Selected user is not an active delivery person'], 422);
+    }
+
+    // attach
+    $delivery->delivery_person_id = $deliveryPerson->id;
+    // keep legacy text field for display
+    $delivery->delivery_person = $deliveryPerson->name;
+    // optional: mark as assigned (if you made status string)
+    if (in_array($delivery->status, ['pending'])) {
+        $delivery->status = 'pending'; // or 'assigned' if you support it
+    }
+    $delivery->save();
+
+    // notify delivery person and order user
+    Notification::create([
+        'user_id' => $deliveryPerson->id,
+        'title' => 'New Delivery Assigned',
+        'message' => "You have been assigned delivery for order #{$delivery->order->order_id}.",
+    ]);
+
+    Notification::create([
+        'user_id' => $delivery->order->user_id,
+        'title' => 'Delivery Assigned',
+        'message' => "Your order #{$delivery->order->order_id} has been assigned to {$deliveryPerson->name}.",
+    ]);
+
+    return response()->json(['success' => true, 'delivery' => $delivery->load('deliveryPerson')], 200);
+}
+
+/**
+ * POST /api/admin/deliveries/{id}/unassign
+ */
+public function unassignDelivery(Request $request, $id)
+{
+    $this->ensureAdmin($request->user());
+
+    $delivery = Delivery::findOrFail($id);
+    $delivery->delivery_person_id = null;
+    $delivery->delivery_person = null;
+    // optionally reset status to pending
+    $delivery->status = 'pending';
+    $delivery->save();
+
+    return response()->json(['success' => true, 'delivery' => $delivery], 200);
+}
+
+/**
+ * POST /api/admin/deliveries/{id}/complete
+ */
+public function completeDelivery(Request $request, $id)
+{
+    $this->ensureAdmin($request->user());
+
+    $delivery = Delivery::findOrFail($id);
+    $delivery->status = 'completed';
+    $delivery->save();
+
+    // update order status as well (if you want)
+    $order = $delivery->order;
+    if ($order) {
+        $order->update(['status' => 'delivered']);
+    }
+
+    Notification::create([
+        'user_id' => $order->user_id,
+        'title' => 'Order Delivered',
+        'message' => "Your order #{$order->order_id} was delivered.",
+    ]);
+
+    return response()->json(['success' => true, 'delivery' => $delivery], 200);
+}
+
 
     /**
      * GET /api/admin/payments
@@ -742,7 +848,7 @@ class AdminController extends Controller
      * GET /api/admin/locations
      */
     public function locations(Request $request)
-    {
+    { 
         $this->ensureAdmin($request->user());
         $locations = Location::orderBy('name','asc')->paginate(30);
         return response()->json($locations);

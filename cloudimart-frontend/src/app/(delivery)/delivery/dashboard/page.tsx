@@ -38,7 +38,7 @@ export default function DeliveryDashboardPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }; 
 
   useEffect(() => {
     loadOrders();
