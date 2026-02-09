@@ -5,19 +5,6 @@ import React, { useEffect, useState } from 'react';
 import client from '../../../lib/api/client';
 import LoadingSpinner from '../../../components/common/LoadingSpinner';
 
-type DeliveryPerson = {
-  id?: number;
-  name?: string | null;
-  phone_number?: string | null;
-};
-
-type Delivery = {
-  id?: number;
-  delivery_person?: string | null; // legacy text
-  delivery_person_id?: number | null;
-  deliveryPerson?: DeliveryPerson | null; // relation
-};
-
 type Order = {
   id: number;
   order_id: string;
@@ -25,7 +12,9 @@ type Order = {
   status: string;
   delivery_address: string;
   created_at: string;
-  delivery?: Delivery | null;
+  delivery_display?: string | null; // server-provided friendly string
+  // old shape may include nested delivery object; we don't render it directly
+  delivery?: any;
 };
 
 export default function OrdersPage() {
@@ -42,10 +31,8 @@ export default function OrdersPage() {
       case 'delivered':
         return 'Delivered';
       case 'completed':
-        // backwards-compat: if any legacy rows exist
         return 'Completed';
       default:
-        // fallback: convert snake-case to spaced words (simple)
         return s.replace(/_/g, ' ');
     }
   };
@@ -53,13 +40,12 @@ export default function OrdersPage() {
   const statusBadgeClass = (s: string) => {
     switch (s) {
       case 'pending_delivery':
-        return 'bg-warning text-dark'; // waiting for delivery
+        return 'bg-warning text-dark';
       case 'pending':
-        return 'bg-secondary text-white'; // waiting stage
+        return 'bg-secondary text-white';
       case 'delivered':
-        return 'bg-success';
       case 'completed':
-        return 'bg-success'; // treat completed as success if present
+        return 'bg-success';
       default:
         return 'bg-info text-white';
     }
@@ -70,7 +56,6 @@ export default function OrdersPage() {
     setError(null);
     try {
       const res = await client.get('/api/orders');
-      // Laravel paginate returns { data: [...], ...meta }
       const payload = res.data;
       const list = Array.isArray(payload?.data) ? payload.data : (Array.isArray(payload) ? payload : []);
       setOrders(list);
@@ -85,6 +70,32 @@ export default function OrdersPage() {
   useEffect(() => {
     loadOrders();
   }, []);
+
+  // fallback display if server didn't provide delivery_display
+  const deliveryFallback = (o: Order) => {
+    if (o.delivery_display) return o.delivery_display;
+    // defensive: try older nested shapes but produce string
+    const del = o.delivery;
+    if (!del) return 'Unassigned';
+    // if delivery has deliveryPerson object
+    const dp = del.deliveryPerson ?? del.delivery_person ?? null;
+    if (dp) {
+      if (typeof dp === 'string') return dp; // legacy text
+      const name = dp?.name ?? null;
+      const phone = dp?.phone_number ?? null;
+      const parts: string[] = [];
+      if (name) parts.push(name);
+      if (phone) parts.push(phone);
+      if (parts.length > 0) return parts.join(' — ');
+      // last resort: JSON stringified (shouldn't happen)
+      try {
+        return JSON.stringify(dp);
+      } catch {
+        return 'Unassigned';
+      }
+    }
+    return 'Unassigned';
+  };
 
   if (loading) {
     return (
@@ -118,35 +129,20 @@ export default function OrdersPage() {
               </tr>
             </thead>
             <tbody>
-              {orders.map((o) => {
-                // Determine delivery display
-                const dp = o.delivery?.deliveryPerson ?? null; // prefer relation
-                const legacy = o.delivery?.delivery_person ?? null; // fallback text
-                let deliveryDisplay = 'Unassigned';
-                if (dp && (dp.name || dp.phone_number)) {
-                  const pieces = [];
-                  if (dp.name) pieces.push(dp.name);
-                  if (dp.phone_number) pieces.push(dp.phone_number);
-                  deliveryDisplay = pieces.join(' — ');
-                } else if (legacy) {
-                  deliveryDisplay = legacy;
-                }
-
-                return (
-                  <tr key={o.id}>
-                    <td>{o.order_id}</td>
-                    <td>
-                      <span className={`badge ${statusBadgeClass(o.status)}`}>
-                        {statusLabel(o.status)}
-                      </span>
-                    </td>
-                    <td>{Number(o.total).toFixed(2)}</td>
-                    <td>{o.delivery_address}</td>
-                    <td>{deliveryDisplay}</td>
-                    <td>{new Date(o.created_at).toLocaleString()}</td>
-                  </tr>
-                );
-              })}
+              {orders.map((o) => (
+                <tr key={o.id}>
+                  <td>{o.order_id}</td>
+                  <td>
+                    <span className={`badge ${statusBadgeClass(o.status)}`}>
+                      {statusLabel(o.status)}
+                    </span>
+                  </td>
+                  <td>{Number(o.total).toFixed(2)}</td>
+                  <td>{o.delivery_address}</td>
+                  <td>{deliveryFallback(o)}</td>
+                  <td>{new Date(o.created_at).toLocaleString()}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

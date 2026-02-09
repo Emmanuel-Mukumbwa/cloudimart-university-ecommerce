@@ -8,7 +8,7 @@ use App\Models\Delivery;
 
 class Order extends Model
 {
-    use HasFactory;
+    use HasFactory; 
 
     protected $fillable = [
         'order_id',
