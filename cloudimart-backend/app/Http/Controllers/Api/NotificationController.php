@@ -24,7 +24,7 @@ class NotificationController extends Controller
 
         $notif->update(['is_read' => true]);
         return response()->json(['success' => true]);
-    }
+    } 
 
     public function unreadCount(Request $request)
     {

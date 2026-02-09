@@ -57,7 +57,7 @@ export default function RegisterPage() {
       setCoords({ lat, lng });
       setGpsStatus('Verifying location...');
 
-      const res = await axios.post('/api/locations/validate', { lat, lng, location_id: selectedLocationId });
+      const res = await axios.post('/api/locations/validate-public', { lat, lng, location_id: selectedLocationId });
       setVerificationResult(res.data);
       setGpsStatus('');
 
@@ -192,7 +192,7 @@ export default function RegisterPage() {
               </p>
             </div>
           </div>
-        </div>
+        </div> 
       </div>
     </div>
   );
