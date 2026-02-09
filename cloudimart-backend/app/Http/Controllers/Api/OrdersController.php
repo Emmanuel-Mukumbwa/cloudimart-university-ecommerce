@@ -11,10 +11,16 @@ class OrdersController extends Controller
     public function index(Request $request)
     {
         $user = $request->user();
+
         $orders = Order::where('user_id', $user->id)
-                       ->with(['items.product', 'delivery']) 
+                       ->with([
+                           'items.product',
+                           // load delivery and the linked delivery person (user) with only id,name,phone_number
+                           'delivery.deliveryPerson:id,name,phone_number'
+                       ])
                        ->orderBy('created_at', 'desc')
                        ->paginate(10);
+
         return response()->json($orders);
     }
 
