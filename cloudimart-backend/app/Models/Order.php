@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use App\Models\Delivery;
 
 class Order extends Model
 {
@@ -12,7 +13,7 @@ class Order extends Model
     protected $fillable = [
         'order_id',
         'user_id',
-        'total',
+        'total', 
         'delivery_address',
         'delivery_lat', 
         'delivery_lng',
