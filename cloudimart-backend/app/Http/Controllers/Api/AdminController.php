@@ -853,4 +853,38 @@ public function completeDelivery(Request $request, $id)
         $locations = Location::orderBy('name','asc')->paginate(30);
         return response()->json($locations);
     }
+
+    /**
+ * GET /api/admin/summary
+ * Quick counts for admin badges:
+ *  - pending_proofs: payments that are pending and have a proof_url (need admin attention)
+ *  - orders_unassigned: orders without an assigned delivery person (needs assignment)
+ */
+public function summary(Request $request)
+{
+    $this->ensureAdmin($request->user());
+
+    try {
+        // payments: pending + proof uploaded
+        $pendingProofs = Payment::where('status', 'pending')
+            ->whereNotNull('proof_url')
+            ->count();
+
+        // orders without an assigned delivery person:
+        // count orders for which there is NOT a delivery with a non-null delivery_person_id
+        $ordersUnassigned = Order::whereDoesntHave('delivery', function ($q) {
+            $q->whereNotNull('delivery_person_id');
+        })->count();
+
+        return response()->json([
+            'pending_proofs' => (int) $pendingProofs,
+            'orders_unassigned' => (int) $ordersUnassigned,
+        ], 200);
+    } catch (\Throwable $e) {
+        \Log::error('Admin.summary error: ' . $e->getMessage());
+        return response()->json(['message' => 'Failed to load admin summary'], 500);
+    }
 }
+
+}
+
