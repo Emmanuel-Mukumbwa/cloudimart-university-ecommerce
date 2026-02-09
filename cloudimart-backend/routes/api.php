@@ -118,7 +118,8 @@ Route::prefix('admin')->group(function () {
     Route::post('/orders/{orderId}/create-delivery', [AdminController::class, 'createDeliveryForOrder']);
 
     Route::get('/payments', [AdminController::class, 'payments']);
-     Route::post('/payments/{id}/approve', [PaymentController::class, 'adminApprove']); 
+    Route::post('/payments/{id}/approve', [PaymentController::class, 'adminApprove']); 
+    Route::post('/payments/{id}/reject', [AdminController::class, 'rejectPayment']);
     Route::post('/notify', [AdminController::class, 'notify']);
     Route::get('/locations', [AdminController::class, 'locations']);
     
