@@ -86,7 +86,7 @@ class PaymentController extends Controller
     /**
      * POST /api/payment/initiate
      * Expects: amount, mobile, network, delivery_lat, delivery_lng, delivery_address, cart_hash
-     * Returns: { checkout_url, tx_ref }
+     * Returns: { checkout_url, tx_ref, payment }
      */
     public function initiate(Request $request)
     {
@@ -100,14 +100,48 @@ class PaymentController extends Controller
             'cart_hash' => 'nullable|string',
         ]);
 
+        $userId = auth()->id();
+
+        // build server-side snapshot of user's cart (authoritative)
+        $cart = Cart::where('user_id', $userId)->with('items.product')->first();
+        $cartSnapshot = [];
+        $cartTotal = 0.0;
+        if ($cart && $cart->items->isNotEmpty()) {
+            foreach ($cart->items as $ci) {
+                $prod = $ci->product;
+                $price = $prod ? (float)$prod->price : (float)($ci->price ?? 0);
+                $qty = (int)($ci->quantity ?? 0);
+                $cartSnapshot[] = [
+                    'product_id' => $ci->product_id,
+                    'name' => $prod ? $prod->name : ($ci->name ?? null),
+                    'price' => $price,
+                    'qty' => $qty,
+                ];
+                $cartTotal += $price * $qty;
+            }
+        }
+
         // create unique merchant tx ref
         $txRef = uniqid('pay_');
 
-        // Create a local payment record
+        // If amounts differ, prefer server-computed total (authoritative)
+        $requestedAmount = (float) $request->amount;
+        if (abs($requestedAmount - $cartTotal) > 0.01) {
+            Log::info("Payment initiate: client amount mismatch, using server cart total", [
+                'user_id' => $userId,
+                'requested' => $requestedAmount,
+                'cart_total' => $cartTotal,
+            ]);
+            $amountToUse = $cartTotal > 0 ? $cartTotal : $requestedAmount;
+        } else {
+            $amountToUse = $requestedAmount;
+        }
+
+        // Create a local payment record (include snapshot & cart_total in meta)
         $payment = Payment::create([
-            'user_id' => auth()->id(),
+            'user_id' => $userId,
             'tx_ref' => $txRef,
-            'amount' => $request->amount,
+            'amount' => $amountToUse,
             'currency' => 'MWK',
             'status' => 'pending',
             'mobile' => $request->mobile,
@@ -117,6 +151,8 @@ class PaymentController extends Controller
                 'delivery_lng' => $request->delivery_lng,
                 'delivery_address' => $request->delivery_address,
                 'cart_hash' => $request->cart_hash ?? null,
+                'cart_total' => $cartTotal,
+                'cart_snapshot' => $cartSnapshot,
             ],
         ]);
 
@@ -124,7 +160,7 @@ class PaymentController extends Controller
             $secretKey = config('services.paychangu.secret');
 
             $payload = [
-                'amount' => $request->amount,
+                'amount' => $payment->amount,
                 'currency' => 'MWK',
                 'callback_url' => config('app.url') . '/api/payment/callback',
                 'return_url' => config('app.url'),
@@ -331,6 +367,25 @@ class PaymentController extends Controller
             $file = $request->file('file');
             $path = $file->store('payments', 'public');
 
+            // build server-side snapshot of user's cart (authoritative)
+            $cart = Cart::where('user_id', $user->id)->with('items.product')->first();
+            $cartSnapshot = [];
+            $cartTotal = 0.0;
+            if ($cart && $cart->items->isNotEmpty()) {
+                foreach ($cart->items as $ci) {
+                    $prod = $ci->product;
+                    $price = $prod ? (float)$prod->price : (float)($ci->price ?? 0);
+                    $qty = (int)($ci->quantity ?? 0);
+                    $cartSnapshot[] = [
+                        'product_id' => $ci->product_id,
+                        'name' => $prod ? $prod->name : ($ci->name ?? null),
+                        'price' => $price,
+                        'qty' => $qty,
+                    ];
+                    $cartTotal += $price * $qty;
+                }
+            }
+
             $txRef = 'proof_' . uniqid();
 
             $payment = Payment::create([
@@ -347,6 +402,8 @@ class PaymentController extends Controller
                     'delivery_lng' => $validated['delivery_lng'] ?? null,
                     'delivery_address' => $validated['delivery_address'] ?? null,
                     'cart_hash' => $validated['cart_hash'] ?? null,
+                    'cart_total' => $cartTotal,
+                    'cart_snapshot' => $cartSnapshot,
                 ],
                 'proof_url' => $path,
             ]);
@@ -362,7 +419,7 @@ class PaymentController extends Controller
     }
 
     /**
-     * Admin approval (unchanged core logic) but response includes normalized payment
+     * Admin approval (prefers cart_snapshot when present)
      */
     public function adminApprove(Request $request, $id)
     {
@@ -378,6 +435,7 @@ class PaymentController extends Controller
 
         DB::beginTransaction();
         try {
+            // mark success early (keeps parity with previous flow); if later steps fail we roll back
             $payment->status = 'success';
             $payment->save();
 
@@ -399,6 +457,130 @@ class PaymentController extends Controller
                 return response()->json(['message' => 'Payment approved; existing order found', 'order' => $existing], 200);
             }
 
+            // decode meta safely
+            $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
+            $cartSnapshot = $meta['cart_snapshot'] ?? null;
+            $cartTotalFromMeta = isset($meta['cart_total']) ? floatval($meta['cart_total']) : null;
+
+            if ($cartSnapshot && is_array($cartSnapshot) && count($cartSnapshot) > 0) {
+                // Use snapshot to check stock and compute total
+                $total = 0;
+                $insufficient = [];
+
+                foreach ($cartSnapshot as $ci) {
+                    $productRow = DB::table('products')->where('id', $ci['product_id'])->lockForUpdate()->first();
+                    if (!$productRow) {
+                        DB::rollBack();
+                        return response()->json(['success' => false, 'message' => "Product (ID {$ci['product_id']}) not found"], 400);
+                    }
+                    $currentStock = intval($productRow->stock ?? 0);
+                    if ($currentStock < intval($ci['qty'])) {
+                        $insufficient[] = [
+                            'product_id' => $ci['product_id'],
+                            'available' => $currentStock,
+                            'requested' => intval($ci['qty']),
+                        ];
+                    }
+                    $total += floatval($ci['price']) * intval($ci['qty']);
+                }
+
+                if (!empty($insufficient)) {
+                    $meta['approval_issue'] = ['type' => 'stock', 'items' => $insufficient];
+                    $payment->meta = $meta;
+                    $payment->save();
+                    DB::rollBack();
+                    return response()->json(['success' => false, 'message' => 'Some items are out of stock', 'items' => $insufficient], 409);
+                }
+
+                // verify the payment amount matches snapshot total
+                if (floatval($payment->amount) != floatval($total)) {
+                    $meta['amount_mismatch'] = ['payment' => $payment->amount, 'snapshot_total' => $total];
+                    $payment->meta = $meta;
+                    $payment->save();
+                    DB::rollBack();
+                    return response()->json(['message' => 'Amount mismatch', 'meta' => $meta], 422);
+                }
+
+                // create order from snapshot
+                $orderId = 'ORD-' . date('Ymd') . '-' . strtoupper(Str::random(6));
+                $order = Order::create([
+                    'order_id' => $orderId,
+                    'user_id' => $user->id,
+                    'total' => $total,
+                    'delivery_address' => data_get($payment->meta, 'delivery_address') ?? null,
+                    'status' => 'pending_delivery',
+                    'payment_ref' => $payment->tx_ref,
+                ]);
+
+                foreach ($cartSnapshot as $ci) {
+                    OrderItem::create([
+                        'order_id' => $order->id,
+                        'product_id' => $ci['product_id'],
+                        'quantity' => $ci['qty'],
+                        'price' => $ci['price'],
+                    ]);
+
+                    DB::table('products')->where('id', $ci['product_id'])->decrement('stock', $ci['qty']);
+                }
+
+                // If the user's current cart exactly matches the snapshot, clear it. Otherwise preserve it.
+                $cart = Cart::where('user_id', $user->id)->with('items')->first();
+                $shouldClearCart = false;
+                if ($cart && $cart->items->isNotEmpty()) {
+                    $currentMap = [];
+                    foreach ($cart->items as $ci) {
+                        $currentMap[intval($ci->product_id)] = intval($ci->quantity);
+                    }
+                    // build snapshot map
+                    $snapMap = [];
+                    foreach ($cartSnapshot as $s) {
+                        $snapMap[intval($s['product_id'])] = intval($s['qty']);
+                    }
+                    // both must have same keys and same quantities
+                    if (count($currentMap) === count($snapMap)) {
+                        $allEqual = true;
+                        foreach ($snapMap as $pid => $qty) {
+                            if (!isset($currentMap[$pid]) || $currentMap[$pid] !== $qty) {
+                                $allEqual = false;
+                                break;
+                            }
+                        }
+                        if ($allEqual) {
+                            $shouldClearCart = true;
+                        }
+                    }
+                }
+                if ($shouldClearCart && $cart) {
+                    $cart->items()->delete();
+                }
+
+                // create delivery record
+                $verificationCode = strtoupper(Str::random(6));
+                Delivery::create([
+                    'order_id' => $order->id,
+                    'delivery_person' => null,
+                    'status' => 'pending',
+                    'verification_code' => $verificationCode
+                ]);
+
+                Notification::create([
+                    'user_id' => $user->id,
+                    'title' => 'Order Placed',
+                    'message' => "Your order #{$order->order_id} has been placed (admin-approved payment)."
+                ]);
+
+                $meta['order_id'] = $order->order_id;
+                $payment->meta = $meta;
+                $payment->save();
+
+                DB::commit();
+
+                return response()->json(['message' => 'Payment approved and order created', 'order' => $order, 'payment' => $this->paymentToArray($payment)], 200);
+            }
+
+            //
+            // Fallback: no snapshot — use user's current cart (legacy behavior)
+            //
             $cart = Cart::where('user_id', $user->id)->with('items.product')->first();
             if (!$cart || $cart->items->isEmpty()) {
                 $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
