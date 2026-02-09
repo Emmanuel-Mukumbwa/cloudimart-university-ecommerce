@@ -67,7 +67,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/cart/add', [CartController::class, 'add']);
     Route::put('/cart/item/{id}', [CartController::class, 'update']);
     Route::delete('/cart/item/{id}', [CartController::class, 'remove']);
-    Route::get('/cart/count', [CartController::class, 'count']); // optional
+    Route::get('/cart/count', [CartController::class, 'count']); 
+    Route::post('/cart/item/{id}/decrement', [CartController::class, 'decrement']); 
 
     // --- 💳 Payments --- //
     Route::post('/payment/initiate', [PaymentController::class, 'initiate']);
