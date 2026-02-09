@@ -63,7 +63,7 @@ export default function CheckoutPage() {
     (async () => {
       // Load cart first (so we compute a cartHash), then locations/user, then payments filtered by cartHash
       const computed = await loadCart();
-      await loadLocationsAndUser();
+      await loadLocationsAndUser(computed ?? null);
       await fetchPayments(computed ?? null, { excludeOrdered: true, onlyPending: true });
     })();
 
@@ -117,6 +117,7 @@ export default function CheckoutPage() {
       setCartItems(items);
       setTotal(items.reduce((sum: number, i: any) => sum + Number(i.product?.price ?? 0) * (i.quantity ?? 1), 0));
       const hash = computeCartHash(items);
+      // set state (async) but also return immediate computed hash for callers
       setCartHash(hash);
       return hash;
     } catch (e) {
@@ -151,7 +152,8 @@ export default function CheckoutPage() {
   };
 
   // Load locations and (optionally) user to set default selected location
-  const loadLocationsAndUser = async () => {
+  // Now accepts computedCartHash to avoid race with setState timing
+  const loadLocationsAndUser = async (computedCartHash: string | null = null) => {
     try {
       const res = await client.get('/api/locations');
       const payload = res.data?.locations ?? res.data?.data ?? res.data ?? [];
@@ -174,19 +176,29 @@ export default function CheckoutPage() {
           const verifiedAt = new Date(user.delivery_verified_at).getTime();
           const now = Date.now();
           // parse meta (could be array/object or JSON string)
-          const meta =
-            user.delivery_verified_meta ??
-            (typeof user.delivery_verified_meta === 'string' ? JSON.parse(user.delivery_verified_meta) : null);
+          let meta: any = null;
+          try {
+            if (user.delivery_verified_meta && typeof user.delivery_verified_meta === 'string') {
+              meta = JSON.parse(user.delivery_verified_meta);
+            } else {
+              meta = user.delivery_verified_meta ?? null;
+            }
+          } catch (e) {
+            meta = user.delivery_verified_meta ?? null;
+          }
 
           // 1) TTL check
           if (now - verifiedAt <= VERIFICATION_TTL_MS) {
             // 2) Optionally check cart_hash matches (recommended)
             const savedCartHash = meta?.cart_hash ?? null;
-            if (!savedCartHash || savedCartHash === cartHash) {
+            const checkHash = computedCartHash ?? cartHash ?? null;
+            if (!savedCartHash || savedCartHash === checkHash) {
               setVerified(true);
               if (meta?.lat && meta?.lng) setGps({ lat: Number(meta.lat), lng: Number(meta.lng) });
               if (meta?.detected_location?.name)
                 setDetectedArea({ id: meta?.detected_location?.id, name: meta?.detected_location?.name });
+              // restore address if saved
+              if (meta?.delivery_address) setAddress(String(meta.delivery_address));
             } else {
               // cart changed — clear server verification client-side
               setVerified(false);
@@ -217,10 +229,11 @@ export default function CheckoutPage() {
     setVerified(false);
 
     try {
-      // include cart_hash so backend can persist verification for this cart
+      // include cart_hash and delivery_address so backend can persist verification for this cart
       const payload: any = { lat, lng };
       if (location_id) payload.location_id = location_id;
       if (cartHash) payload.cart_hash = cartHash;
+      if (address && address.trim().length > 0) payload.delivery_address = address.trim();
 
       const res = await client.post('/api/locations/validate', payload);
       const data = res.data;
@@ -229,6 +242,12 @@ export default function CheckoutPage() {
 
       setDetectedArea(detected);
       setVerified(insideAny);
+
+      // If the server returned persisted meta and it contains an address, restore it too
+      const savedMeta = data?.delivery_verified_meta ?? null;
+      if (savedMeta && savedMeta.delivery_address) {
+        setAddress(String(savedMeta.delivery_address));
+      }
 
       if (insideAny) {
         setModal({
@@ -377,7 +396,6 @@ export default function CheckoutPage() {
   };
 
   // --- PAYMENT helpers (polling) ---
-
   const startPollingPaymentStatus = (txRef: string) => {
     if (pollingRef.current) window.clearInterval(pollingRef.current);
 
@@ -589,6 +607,18 @@ export default function CheckoutPage() {
   // Determine if we should show the full verification UI
   const showVerificationBlock = !(verified && (paymentTxRef || (userPayments.length > 0)));
 
+  // helper for proof image href/src (prefer absolute proof_url_full)
+  const proofHref = (p: any) => {
+    if (p.proof_url_full) return p.proof_url_full;
+    if (p.proof_url) return `/storage/${p.proof_url}`;
+    return null;
+  };
+  const proofSrc = (p: any) => {
+    if (p.proof_url_full) return p.proof_url_full;
+    if (p.proof_url) return `/storage/${p.proof_url}`;
+    return '/images/placeholder.png';
+  };
+
   return (
     <div className="container py-5">
       <CenteredModal show={modal.show} title={modal.title} body={modal.body} onClose={handleCloseModal} />
@@ -720,8 +750,12 @@ export default function CheckoutPage() {
                 <div className="list-group">
                   {userPayments.map((p) => (
                     <div key={p.id ?? p.tx_ref} className="list-group-item d-flex align-items-center gap-3">
-                      <a href={(p.proof_url ? `/storage/${p.proof_url}` : (p.proof_url_full ?? '#'))} target="_blank" rel="noreferrer">
-                        <img src={p.proof_url ? `/storage/${p.proof_url}` : '/images/placeholder.png'} alt="proof" style={{ width: 92, height: 64, objectFit: 'cover', borderRadius: 6 }} />
+                      <a href={proofHref(p) ?? '#'} target="_blank" rel="noreferrer noopener">
+                        <img
+                          src={proofSrc(p)}
+                          alt={`proof ${p.tx_ref ?? ''}`}
+                          style={{ width: 92, height: 64, objectFit: 'cover', borderRadius: 6 }}
+                        />
                       </a>
                       <div className="flex-fill">
                         <div className="d-flex justify-content-between">

@@ -11,7 +11,7 @@ const client = axios.create({
 // Attach auth header for each request if token exists
 client.interceptors.request.use((cfg) => {
   try {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined') { 
       const token = localStorage.getItem('auth_token');
       if (token) cfg.headers = { ...cfg.headers, Authorization: `Bearer ${token}` };
     }

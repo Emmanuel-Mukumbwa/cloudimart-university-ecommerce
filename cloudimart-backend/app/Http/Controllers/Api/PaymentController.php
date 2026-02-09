@@ -20,6 +20,70 @@ use Illuminate\Support\Facades\Storage;
 class PaymentController extends Controller
 {
     /**
+     * Helper: normalize payment model to array for API responses.
+     * Adds proof_url_full and ensures meta is decoded as array.
+     */
+    protected function paymentToArray(Payment $p): array
+    {
+        // meta as array
+        $meta = $p->meta;
+        if (!is_array($meta)) {
+            $meta = json_decode($p->meta ?? '[]', true) ?: [];
+        }
+
+        // compute proof_url_full
+        $proofUrlFull = null;
+        if (!empty($p->proof_url)) {
+            $raw = $p->proof_url;
+            // if absolute already use it
+            if (preg_match('#^https?://#i', $raw) || str_starts_with($raw, '//')) {
+                $proofUrlFull = $raw;
+            } else {
+                try {
+                    // Use Storage public disk url (works when files stored with store(...,'public'))
+                    $proofUrlFull = Storage::disk('public')->url(ltrim($raw, '/'));
+                } catch (\Throwable $e) {
+                    // Fallback to asset('storage/...')
+                    $proofUrlFull = asset('storage/' . ltrim($raw, '/'));
+                }
+            }
+        }
+
+        // include basic user info if loaded or related
+        $user = null;
+        try {
+            if ($p->relationLoaded('user') || $p->user) {
+                $u = $p->user;
+                if ($u) {
+                    $user = [
+                        'id' => $u->id,
+                        'name' => $u->name,
+                        'email' => $u->email ?? null,
+                    ];
+                }
+            }
+        } catch (\Throwable $e) {
+            $user = null;
+        }
+
+        return [
+            'id' => $p->id,
+            'tx_ref' => $p->tx_ref,
+            'provider_ref' => $p->provider_ref ?? null,
+            'user_id' => $p->user_id ?? null,
+            'user' => $user,
+            'mobile' => $p->mobile ?? null,
+            'amount' => (float) $p->amount,
+            'currency' => $p->currency ?? null,
+            'status' => $p->status,
+            'created_at' => $p->created_at ? $p->created_at->toDateTimeString() : null,
+            'proof_url' => $p->proof_url ?? null,              // stored path or absolute if admin saved absolute
+            'proof_url_full' => $proofUrlFull,                 // resolved absolute URL (or null)
+            'meta' => $meta,
+        ];
+    }
+
+    /**
      * POST /api/payment/initiate
      * Expects: amount, mobile, network, delivery_lat, delivery_lng, delivery_address, cart_hash
      * Returns: { checkout_url, tx_ref }
@@ -90,9 +154,11 @@ class PaymentController extends Controller
             Log::info('PayChangu initiate response', ['response' => $response->json()]);
 
             if ($response->successful() && data_get($response->json(), 'status') === 'success') {
+                // Return checkout_url and tx_ref to frontend
                 return response()->json([
                     'checkout_url' => data_get($response->json(), 'data.checkout_url'),
                     'tx_ref' => $txRef,
+                    'payment' => $this->paymentToArray($payment),
                 ], 200);
             }
 
@@ -122,7 +188,7 @@ class PaymentController extends Controller
         }
 
         if (in_array($payment->status, ['success', 'failed'])) {
-            return response()->json(['status' => $payment->status, 'payment' => $payment], 200);
+            return response()->json(['status' => $payment->status, 'payment' => $this->paymentToArray($payment)], 200);
         }
 
         try {
@@ -156,7 +222,7 @@ class PaymentController extends Controller
         }
 
         $payment->refresh();
-        return response()->json(['status' => $payment->status, 'payment' => $payment], 200);
+        return response()->json(['status' => $payment->status, 'payment' => $this->paymentToArray($payment)], 200);
     }
 
     /**
@@ -193,7 +259,7 @@ class PaymentController extends Controller
             $payment->update(['meta' => $meta]);
         }
 
-        return response()->json(['message' => 'Payment updated'], 200);
+        return response()->json(['message' => 'Payment updated', 'payment' => $this->paymentToArray($payment)], 200);
     }
 
     /**
@@ -222,18 +288,21 @@ class PaymentController extends Controller
 
         if ($excludeOrdered) {
             // exclude payments that already have an order_id in meta
-            // JSON_EXTRACT(meta, '$.order_id') IS NULL ensures only unassociated payments
             $paymentsQuery->whereRaw("JSON_EXTRACT(meta, '$.order_id') IS NULL");
         }
 
         if ($onlyPending) {
-            // only include payments still pending (adjust array if you want pending+failed etc)
             $paymentsQuery->where('status', 'pending');
         }
 
         $payments = $paymentsQuery->get();
 
-        return response()->json(['data' => $payments], 200);
+        // Map to arrays and include proof_url_full
+        $payload = $payments->map(function ($p) {
+            return $this->paymentToArray($p);
+        })->all();
+
+        return response()->json(['data' => $payload], 200);
     }
 
     /**
@@ -284,7 +353,7 @@ class PaymentController extends Controller
 
             DB::commit();
 
-            return response()->json(['tx_ref' => $txRef, 'payment' => $payment], 201);
+            return response()->json(['tx_ref' => $txRef, 'payment' => $this->paymentToArray($payment)], 201);
         } catch (Exception $e) {
             DB::rollBack();
             Log::error('Upload proof error: ' . $e->getMessage());
@@ -293,7 +362,7 @@ class PaymentController extends Controller
     }
 
     /**
-     * Admin approval (unchanged)
+     * Admin approval (unchanged core logic) but response includes normalized payment
      */
     public function adminApprove(Request $request, $id)
     {
@@ -304,7 +373,7 @@ class PaymentController extends Controller
 
         if ($payment->status === 'success') {
             $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
-            return response()->json(['message' => 'Already approved', 'payment' => $payment, 'meta' => $meta], 200);
+            return response()->json(['message' => 'Already approved', 'payment' => $this->paymentToArray($payment), 'meta' => $meta], 200);
         }
 
         DB::beginTransaction();
@@ -417,7 +486,7 @@ class PaymentController extends Controller
 
             DB::commit();
 
-            return response()->json(['message' => 'Payment approved and order created', 'order' => $order], 200);
+            return response()->json(['message' => 'Payment approved and order created', 'order' => $order, 'payment' => $this->paymentToArray($payment)], 200);
         } catch (Exception $e) {
             DB::rollBack();
             Log::error('adminApprove error: ' . $e->getMessage());
