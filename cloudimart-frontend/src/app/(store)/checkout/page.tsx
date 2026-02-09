@@ -56,10 +56,16 @@ export default function CheckoutPage() {
   const [userPayments, setUserPayments] = useState<any[]>([]);
   const [loadingPayments, setLoadingPayments] = useState(false);
 
-  // Other pending payments (global pending payments for this user, possibly different cart_hash)
+  // Other pending payments (different cart snapshot)
   const [otherPendingPayments, setOtherPendingPayments] = useState<any[]>([]);
   const [showOtherPayments, setShowOtherPayments] = useState(false);
   const [loadingOtherPayments, setLoadingOtherPayments] = useState(false);
+
+  // Global pending payments & reservation map
+  const [pendingPayments, setPendingPayments] = useState<any[]>([]);
+  const [reservedByProduct, setReservedByProduct] = useState<Record<number, number>>({});
+  const [coveredAmount, setCoveredAmount] = useState<number>(0);
+  const [remainingToPay, setRemainingToPay] = useState<number>(0);
 
   // Verification TTL (1 hour)
   const VERIFICATION_TTL_MS = 1000 * 60 * 60;
@@ -71,6 +77,8 @@ export default function CheckoutPage() {
       await loadLocationsAndUser(computed ?? null);
       await fetchPayments(computed ?? null, { excludeOrdered: true, onlyPending: true });
       await fetchOtherPendingPayments(computed ?? null);
+      // Important: compute global reservations after cart loaded
+      await loadAllPendingPayments(computed ?? null);
     })();
 
     return () => {
@@ -157,7 +165,48 @@ export default function CheckoutPage() {
     }
   };
 
-  // Fetch all pending payments for the user (global) and keep those not matching current cartHash
+  // Fetch all pending payments for the user (global) and compute reservation map
+  const loadAllPendingPayments = async (currentHash: string | null = null) => {
+    try {
+      const res = await client.get('/api/payments', { params: { only_pending: 1, exclude_ordered: 1 } });
+      const payload = res.data?.data ?? res.data ?? [];
+      const payments = Array.isArray(payload) ? payload : [];
+      setPendingPayments(payments);
+
+      const reserved: Record<number, number> = {};
+      payments.forEach((p: any) => {
+        const snapshot = p.meta?.cart_snapshot ?? null;
+        if (Array.isArray(snapshot)) {
+          snapshot.forEach((si: any) => {
+            const pid = Number(si.product_id ?? 0);
+            const qty = Number(si.quantity ?? 0);
+            if (!pid || qty <= 0) return;
+            reserved[pid] = (reserved[pid] ?? 0) + qty;
+          });
+        }
+      });
+      setReservedByProduct(reserved);
+
+      // compute covered amount (intersection of current cart and reservations)
+      const covered = cartItems.reduce((acc: number, it: any) => {
+        const pid = Number(it.product?.id ?? it.product_id ?? 0);
+        const qty = Number(it.quantity ?? it.qty ?? 0);
+        const price = Number(it.product?.price ?? it.price ?? 0);
+        const r = reserved[pid] ?? 0;
+        const applicable = Math.min(qty, r);
+        return acc + applicable * price;
+      }, 0);
+      setCoveredAmount(covered);
+      setRemainingToPay(Math.max(0, total - covered));
+    } catch (e) {
+      setPendingPayments([]);
+      setReservedByProduct({});
+      setCoveredAmount(0);
+      setRemainingToPay(total);
+    }
+  };
+
+  // Fetch other pending payments for user (those with different cart_hash)
   const fetchOtherPendingPayments = async (currentHash: string | null = null) => {
     setLoadingOtherPayments(true);
     try {
@@ -451,6 +500,7 @@ export default function CheckoutPage() {
             await fetchPayments(cartHash, { excludeOrdered: true, onlyPending: true });
             await fetchOtherPendingPayments(cartHash);
             await loadCart();
+            await loadAllPendingPayments(cartHash);
             // stop polling
             if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
             return;
@@ -496,11 +546,13 @@ export default function CheckoutPage() {
     setShowPaymentModal(true);
   };
 
-  // On PayChangu initiation (now includes cart_hash)
-  const handleInitiatePayChangu = async (payload: { amount: number; mobile: string; network: string; delivery_lat?: number; delivery_lng?: number; delivery_address?: string }) => {
+  // On PayChangu initiation (now includes cart_hash) — use remainingToPay if caller didn't pass amount
+  const handleInitiatePayChangu = async (payload: { amount?: number; mobile: string; network: string; delivery_lat?: number; delivery_lng?: number; delivery_address?: string }) => {
     setPaymentLoading(true);
     try {
-      const body = { ...payload, cart_hash: cartHash, delivery_address: payload.delivery_address ?? address ?? '' };
+      // prefer payload.amount, otherwise charge remainingToPay (fallback to total)
+      const amountToSend = typeof payload.amount === 'number' ? payload.amount : (remainingToPay ?? total);
+      const body = { ...payload, amount: amountToSend, cart_hash: cartHash, delivery_address: payload.delivery_address ?? address ?? '' };
       const res = await client.post('/api/payment/initiate', body);
       const checkoutUrl = res.data?.checkout_url ?? res.data?.data?.checkout_url;
       const txRef = res.data?.tx_ref ?? res.data?.data?.tx_ref ?? res.data?.payment?.tx_ref ?? null;
@@ -520,6 +572,7 @@ export default function CheckoutPage() {
       // refresh payments but filtered to cartHash and also global pending list
       await fetchPayments(cartHash, { excludeOrdered: true, onlyPending: true });
       await fetchOtherPendingPayments(cartHash);
+      await loadAllPendingPayments(cartHash);
 
       return { checkout_url: checkoutUrl, tx_ref: txRef };
     } catch (err: any) {
@@ -558,6 +611,7 @@ export default function CheckoutPage() {
       // refresh list for this cart and global list
       await fetchPayments(cartHash, { excludeOrdered: true, onlyPending: true });
       await fetchOtherPendingPayments(cartHash);
+      await loadAllPendingPayments(cartHash);
 
       return { tx_ref: txRef };
     } catch (err: any) {
@@ -617,6 +671,7 @@ export default function CheckoutPage() {
         await loadCart();
         await fetchPayments(null, { excludeOrdered: true, onlyPending: true });
         await fetchOtherPendingPayments(null);
+        await loadAllPendingPayments(null);
       } else {
         setModal({ show: true, title: 'Order failed', body: res.data?.message ?? 'Failed to place order' });
       }
@@ -661,7 +716,7 @@ export default function CheckoutPage() {
 
       <PaymentModal
         show={showPaymentModal}
-        amount={total}
+        amount={remainingToPay} // <-- prefill with remaining to pay
         defaultMobile={''}
         defaultNetwork={'mpamba'}
         defaultAddress={address}
@@ -825,7 +880,7 @@ export default function CheckoutPage() {
                     <button className="btn btn-sm btn-outline-secondary me-2" onClick={() => setShowOtherPayments(!showOtherPayments)}>
                       {showOtherPayments ? 'Hide' : 'Show'} other pending payments ({otherPendingPayments.length})
                     </button>
-                    <button className="btn btn-sm btn-outline-dark" onClick={async () => { await fetchOtherPendingPayments(cartHash); await fetchPayments(cartHash); }}>
+                    <button className="btn btn-sm btn-outline-dark" onClick={async () => { await fetchOtherPendingPayments(cartHash); await fetchPayments(cartHash); await loadAllPendingPayments(cartHash); }}>
                       Refresh
                     </button>
                   </div>
@@ -866,6 +921,13 @@ export default function CheckoutPage() {
               </div>
             ) : null}
 
+            {/* Summary: cart total, covered amount and remaining */}
+            <div className="mb-3">
+              <div className="small text-muted">Cart total: MK {total.toFixed(2)}</div>
+              <div className="small text-success">Already reserved/covered: MK {coveredAmount.toFixed(2)}</div>
+              <div className="h5">Remaining to pay: {remainingToPay <= 0 ? <span className="text-success">None</span> : `MK ${remainingToPay.toFixed(2)}`}</div>
+            </div>
+
             {error && <div className="alert alert-danger">{error}</div>}
 
             <div className="d-flex justify-content-end gap-3">
@@ -884,6 +946,6 @@ export default function CheckoutPage() {
           </>
         )}
       </div>
-    </div> 
+    </div>
   );
 }
