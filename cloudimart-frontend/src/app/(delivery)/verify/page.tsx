@@ -1,3 +1,4 @@
+//src/app/(delivery)/verify/page.tsx
 'use client';
 import React, { useState } from 'react';
 import client from '../../../lib/api/client';

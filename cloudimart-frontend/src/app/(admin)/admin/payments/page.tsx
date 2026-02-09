@@ -5,6 +5,7 @@ import React, { useEffect, useState } from 'react';
 import client from '../../../../lib/api/client';
 import LoadingSpinner from '../../../../components/common/LoadingSpinner';
 import CenteredModal from '../../../../components/common/CenteredModal';
+import AdminTabs from '../../../../components/common/AdminTabs';
 
 type Payment = {
   id: number;
@@ -98,6 +99,8 @@ export default function AdminPaymentsPage() {
 
   return (
     <div className="container py-4">
+      <AdminTabs />
+
       <div className="d-flex justify-content-between align-items-center mb-3">
         <h4>Payments</h4>
         <div className="d-flex gap-2">
@@ -204,4 +207,3 @@ export default function AdminPaymentsPage() {
     </div>
   );
 }
- 

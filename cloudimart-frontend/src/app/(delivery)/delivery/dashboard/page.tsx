@@ -1,9 +1,10 @@
-//src/app/(delivery)/delivery/dashboard/page.tsx
+// File: src/app/(delivery)/delivery/dashboard/page.tsx
 'use client';
 
 import React, { useEffect, useState } from 'react';
 import client from '../../../../lib/api/client';
 import LoadingSpinner from '../../../../components/common/LoadingSpinner';
+import CenteredModal from '../../../../components/common/CenteredModal';
 import { useRouter } from 'next/navigation';
 
 type Product = { id: number; name: string; price: number };
@@ -16,70 +17,82 @@ type Order = {
   status: string;
   created_at: string;
   user: { id: number; name: string; phone_number: string } | null;
-  order_items?: OrderItem[]; // API may return order_items or orderItems
-  orderItems?: OrderItem[];
+  items?: OrderItem[]; // items relation
+  order_items?: OrderItem[]; // fallback
+  orderItems?: OrderItem[]; // alternate fallback
+};
+type DeliveryWithOrder = {
+  id: number;
+  order: Order;
+  delivery_person?: string | null;
+  delivery_person_id?: number | null;
+  status?: string | null;
+  verification_code?: string | null;
+  created_at?: string | null;
 };
 
 export default function DeliveryDashboardPage() {
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [deliveries, setDeliveries] = useState<DeliveryWithOrder[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // verify form
   const [verifyOrderId, setVerifyOrderId] = useState('');
-  const [verifyPhone, setVerifyPhone] = useState('');
-  const [message, setMessage] = useState<string | null>(null);
+  const [verifyPhone, setVerifyPhone] = useState('+265'); // prefill +265
+  const [verifyPerson, setVerifyPerson] = useState('');
+
+  // modal for results (success/failure/info)
+  const [modal, setModal] = useState<{ show: boolean; title?: string; body?: React.ReactNode }>({ show: false });
+
   const router = useRouter();
 
-  const loadOrders = async () => {
+  const loadDeliveries = async () => {
     setLoading(true);
     try {
       const res = await client.get('/api/delivery/dashboard');
-      setOrders(res.data.orders ?? []);
+      const payload = res.data;
+      const list = payload?.deliveries ?? [];
+      setDeliveries(Array.isArray(list) ? list : []);
     } catch (err: any) {
-      setMessage(err?.userMessage ?? 'Failed to load orders');
+      console.error('Failed to load deliveries', err);
+      setModal({ show: true, title: 'Load failed', body: err?.response?.data?.message ?? err?.message ?? 'Failed to load deliveries' });
+      setDeliveries([]);
     } finally {
       setLoading(false);
     }
-  }; 
+  };
 
   useEffect(() => {
-    loadOrders();
+    loadDeliveries();
   }, []);
 
-  const handleComplete = async (orderId: number) => {
-    if (!confirm('Mark this order as delivered?')) return;
-    try {
-      const res = await client.post(`/api/delivery/orders/${orderId}/complete`);
-      if (res.data?.success) {
-        setMessage(res.data.message || 'Order marked delivered');
-        await loadOrders();
-      } else {
-        setMessage(res.data?.message ?? 'Failed to update');
-      }
-    } catch (err: any) {
-      setMessage(err?.response?.data?.message ?? err?.userMessage ?? 'Failed to update delivery');
-    }
-  };
-
+  // Handle verification form submission
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
-    setMessage(null);
+    setModal({ show: false });
     try {
-      const res = await client.post('/api/delivery/verify', {
+      const payload = {
         order_id: verifyOrderId,
         phone: verifyPhone,
-      });
+        delivery_person: verifyPerson || undefined,
+      };
+      const res = await client.post('/api/delivery/verify', payload);
       if (res.data?.success) {
-        setMessage('Delivery verified: ' + res.data.order_id);
+        setModal({ show: true, title: 'Verified', body: `Delivery confirmed for ${res.data.order_id}` });
         setVerifyOrderId('');
-        setVerifyPhone('');
-        await loadOrders();
+        setVerifyPhone('+265');
+        setVerifyPerson('');
+        await loadDeliveries();
       } else {
-        setMessage(res.data?.message ?? 'Verification failed');
+        setModal({ show: true, title: 'Verification failed', body: res.data?.message ?? 'Verification failed' });
       }
     } catch (err: any) {
-      setMessage(err?.response?.data?.message ?? err?.userMessage ?? 'Verification error');
+      console.error('Verify error', err);
+      const msg = err?.response?.data?.message ?? err?.message ?? 'Verification error';
+      setModal({ show: true, title: 'Error', body: String(msg) });
     }
   };
 
+  // small helpers for status labels
   const statusLabel = (s: string) => {
     switch (s) {
       case 'pending_delivery':
@@ -120,43 +133,63 @@ export default function DeliveryDashboardPage() {
         <h4>Delivery Dashboard</h4>
         <div>
           <button className="btn btn-secondary me-2" onClick={() => router.push('/')}>Back</button>
-          <button className="btn btn-primary" onClick={loadOrders}>Refresh</button>
+          <button className="btn btn-primary" onClick={loadDeliveries}>Refresh</button>
         </div>
       </div>
 
-      {message && <div className="alert alert-info">{message}</div>}
-
       <div className="card mb-4">
         <div className="card-body">
-          <h6 className="mb-3">Verify delivery (OrderID + Phone)</h6>
+          <h6 className="mb-3">Verify delivery (Order ID + Phone)</h6>
           <form onSubmit={handleVerify} className="row g-2">
-            <div className="col-md-5">
-              <input className="form-control" placeholder="Order ID (e.g. ORD-20260206-ABC123)" value={verifyOrderId} onChange={(e) => setVerifyOrderId(e.target.value)} required />
-            </div>
             <div className="col-md-4">
-              <input className="form-control" placeholder="Customer phone" value={verifyPhone} onChange={(e) => setVerifyPhone(e.target.value)} required />
+              <input
+                className="form-control"
+                placeholder="Order ID (e.g. ORD-20260206-ABC123)"
+                value={verifyOrderId}
+                onChange={(e) => setVerifyOrderId(e.target.value)}
+                required
+              />
             </div>
             <div className="col-md-3">
+              <input
+                className="form-control"
+                placeholder="Customer phone (prefilled +265)"
+                value={verifyPhone}
+                onChange={(e) => setVerifyPhone(e.target.value)}
+                required
+              />
+            </div>
+            <div className="col-md-3">
+              <input
+                className="form-control"
+                placeholder="Delivery person name (optional)"
+                value={verifyPerson}
+                onChange={(e) => setVerifyPerson(e.target.value)}
+              />
+            </div>
+            <div className="col-md-2">
               <button className="btn btn-success w-100" type="submit">Verify & Complete</button>
             </div>
           </form>
+          <div className="small text-muted mt-2">Tip: Enter the order ID and customer phone exactly as recorded (you can edit the phone if needed).</div>
         </div>
       </div>
 
       <div>
-        <h6 className="mb-3">Pending Orders</h6>
+        <h6 className="mb-3">Assigned Deliveries (pending)</h6>
 
-        {orders.length === 0 ? (
-          <div className="text-muted">No active orders to deliver.</div>
+        {deliveries.length === 0 ? (
+          <div className="text-muted">No deliveries assigned to you at the moment.</div>
         ) : (
           <div className="list-group">
-            {orders.map((o) => {
-              const items = (o as any).order_items ?? (o as any).orderItems ?? [];
+            {deliveries.map((d) => {
+              const o = d.order;
+              const items = (o.items ?? o.order_items ?? o.orderItems ?? []);
               const readableStatus = statusLabel(o.status);
               const badgeClass = statusBadgeClass(o.status);
 
               return (
-                <div key={o.id} className="list-group-item mb-2 shadow-sm">
+                <div key={d.id} className="list-group-item mb-2 shadow-sm">
                   <div className="d-flex justify-content-between">
                     <div>
                       <div className="fw-bold">{o.order_id}</div>
@@ -184,9 +217,8 @@ export default function DeliveryDashboardPage() {
                       </div>
                       <div className="mb-2 small text-muted">{new Date(o.created_at).toLocaleString()}</div>
                       <div>
-                        {o.status !== 'delivered' && (
-                          <button className="btn btn-sm btn-success me-2" onClick={() => handleComplete(o.id)}>Mark delivered</button>
-                        )}
+                        {/* removed Mark delivered button: verification happens via the form above */}
+                        <div className="small text-muted">Verify with Order ID & customer phone (see form above)</div>
                       </div>
                     </div>
                   </div>
@@ -196,7 +228,14 @@ export default function DeliveryDashboardPage() {
           </div>
         )}
       </div>
+
+      <CenteredModal
+        show={modal.show}
+        title={modal.title}
+        body={modal.body}
+        onClose={() => setModal({ show: false })}
+        okLabel="OK"
+      />
     </div>
   );
 }
-
