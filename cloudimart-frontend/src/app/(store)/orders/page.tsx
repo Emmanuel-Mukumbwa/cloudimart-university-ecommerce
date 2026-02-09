@@ -5,6 +5,19 @@ import React, { useEffect, useState } from 'react';
 import client from '../../../lib/api/client';
 import LoadingSpinner from '../../../components/common/LoadingSpinner';
 
+type DeliveryPerson = {
+  id?: number;
+  name?: string | null;
+  phone_number?: string | null;
+};
+
+type Delivery = {
+  id?: number;
+  delivery_person?: string | null; // legacy text
+  delivery_person_id?: number | null;
+  deliveryPerson?: DeliveryPerson | null; // relation
+};
+
 type Order = {
   id: number;
   order_id: string;
@@ -12,6 +25,7 @@ type Order = {
   status: string;
   delivery_address: string;
   created_at: string;
+  delivery?: Delivery | null;
 };
 
 export default function OrdersPage() {
@@ -56,17 +70,13 @@ export default function OrdersPage() {
     setError(null);
     try {
       const res = await client.get('/api/orders');
-      const data = res.data?.data ?? res.data ?? [];
-      // If API returns a paginated object, data may be an object with .data array
-      if (Array.isArray(data)) {
-        setOrders(data);
-      } else if (Array.isArray(res.data?.data)) {
-        setOrders(res.data.data);
-      } else {
-        setOrders([]);
-      }
+      // Laravel paginate returns { data: [...], ...meta }
+      const payload = res.data;
+      const list = Array.isArray(payload?.data) ? payload.data : (Array.isArray(payload) ? payload : []);
+      setOrders(list);
     } catch (e: any) {
-      setError(e?.userMessage ?? 'Failed to load orders');
+      setError(e?.response?.data?.message ?? e?.message ?? 'Failed to load orders');
+      setOrders([]);
     } finally {
       setLoading(false);
     }
@@ -103,23 +113,40 @@ export default function OrdersPage() {
                 <th>Status</th>
                 <th>Total (MK)</th>
                 <th>Delivery Address</th>
+                <th>Delivery</th>
                 <th>Date</th>
               </tr>
             </thead>
             <tbody>
-              {orders.map((o) => (
-                <tr key={o.id}>
-                  <td>{o.order_id}</td>
-                  <td>
-                    <span className={`badge ${statusBadgeClass(o.status)}`}>
-                      {statusLabel(o.status)}
-                    </span>
-                  </td>
-                  <td>{Number(o.total).toFixed(2)}</td>
-                  <td>{o.delivery_address}</td>
-                  <td>{new Date(o.created_at).toLocaleString()}</td>
-                </tr>
-              ))}
+              {orders.map((o) => {
+                // Determine delivery display
+                const dp = o.delivery?.deliveryPerson ?? null; // prefer relation
+                const legacy = o.delivery?.delivery_person ?? null; // fallback text
+                let deliveryDisplay = 'Unassigned';
+                if (dp && (dp.name || dp.phone_number)) {
+                  const pieces = [];
+                  if (dp.name) pieces.push(dp.name);
+                  if (dp.phone_number) pieces.push(dp.phone_number);
+                  deliveryDisplay = pieces.join(' — ');
+                } else if (legacy) {
+                  deliveryDisplay = legacy;
+                }
+
+                return (
+                  <tr key={o.id}>
+                    <td>{o.order_id}</td>
+                    <td>
+                      <span className={`badge ${statusBadgeClass(o.status)}`}>
+                        {statusLabel(o.status)}
+                      </span>
+                    </td>
+                    <td>{Number(o.total).toFixed(2)}</td>
+                    <td>{o.delivery_address}</td>
+                    <td>{deliveryDisplay}</td>
+                    <td>{new Date(o.created_at).toLocaleString()}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -127,4 +154,3 @@ export default function OrdersPage() {
     </div>
   );
 }
-
