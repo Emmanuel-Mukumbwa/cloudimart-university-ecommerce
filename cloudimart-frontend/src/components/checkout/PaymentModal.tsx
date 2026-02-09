@@ -29,6 +29,9 @@ export default function PaymentModal({
   defaultLat,
   defaultLng,
 }: Props) {
+  // Defensive amount handling
+  const safeAmount = Number.isFinite(Number(amount)) ? Number(amount) : 0;
+
   const [method, setMethod] = useState<'paychangu' | 'upload_proof'>('paychangu');
   const [mobile, setMobile] = useState(defaultMobile);
   const [network, setNetwork] = useState(defaultNetwork);
@@ -56,10 +59,17 @@ export default function PaymentModal({
 
   const submitPayChangu = async () => {
     setErr(null);
+
+    // basic client-side validation
+    if (!mobile || mobile.trim().length < 3) {
+      setErr('Please provide a valid mobile number to proceed.');
+      return;
+    }
+
     setLoading(true);
     try {
       const payload = {
-        amount,
+        amount: safeAmount,
         mobile,
         network,
         delivery_lat: defaultLat,
@@ -68,7 +78,7 @@ export default function PaymentModal({
       };
       const r = await onInitiatePayChangu(payload);
       setLoading(false);
-      // caller handles returned checkout_url or tx_ref
+      // caller will handle checkout_url / tx_ref / polling
       return r;
     } catch (e: any) {
       setErr(e?.message ?? 'Failed to initiate payment');
@@ -84,11 +94,18 @@ export default function PaymentModal({
       return;
     }
 
+    // optional: require mobile when uploading proof so admins can contact payer
+    if (!mobile || mobile.trim().length < 3) {
+      setErr('Please provide a mobile number used to make the payment (for admin reference).');
+      return;
+    }
+
     setLoading(true);
     try {
       const fd = new FormData();
-      fd.append('file', file);
-      fd.append('amount', String(amount));
+      // Use safeAmount and include filename for the file entry
+      fd.append('amount', String(safeAmount));
+      fd.append('file', file, file.name);
       fd.append('mobile', mobile ?? '');
       fd.append('network', network ?? '');
       fd.append('delivery_lat', defaultLat !== undefined ? String(defaultLat) : '');
@@ -98,6 +115,7 @@ export default function PaymentModal({
 
       const r = await onUploadProof(fd);
       setLoading(false);
+      // caller will process tx_ref/polling
       return r;
     } catch (e: any) {
       setErr(e?.message ?? 'Failed to upload proof');
@@ -113,7 +131,7 @@ export default function PaymentModal({
         <div className="modal-dialog modal-dialog-centered modal-lg" role="document">
           <div className="modal-content">
             <div className="modal-header">
-              <h5 className="modal-title">Make Payment — MK {amount.toFixed(2)}</h5>
+              <h5 className="modal-title">Make Payment — MK {safeAmount.toFixed(2)}</h5>
               <button type="button" className="btn-close" onClick={handleClose} />
             </div>
 
@@ -131,7 +149,12 @@ export default function PaymentModal({
               <div className="row g-3">
                 <div className="col-md-6">
                   <label className="form-label small">Mobile number</label>
-                  <input className="form-control" value={mobile} onChange={(e) => setMobile(e.target.value)} placeholder="e.g. 0991234567" />
+                  <input
+                    className="form-control"
+                    value={mobile}
+                    onChange={(e) => setMobile(e.target.value)}
+                    placeholder="e.g. 0991234567"
+                  />
                 </div>
 
                 <div className="col-md-6">
@@ -184,12 +207,12 @@ export default function PaymentModal({
                   onClick={async () => {
                     try {
                       await submitPayChangu();
-                      // note: parent will receive result and handle redirect/polling
+                      // parent handles checkout/polling
                     } catch (e) {
                       // error already set
                     }
                   }}
-                  disabled={loading}
+                  disabled={loading || !mobile || mobile.trim().length < 3}
                 >
                   {loading ? <LoadingSpinner /> : 'Proceed to PayChangu'}
                 </button>
@@ -200,10 +223,12 @@ export default function PaymentModal({
                   onClick={async () => {
                     try {
                       await submitProof();
-                      // parent processes the returned tx_ref & polling
-                    } catch (e) {}
+                      // parent handles tx_ref & polling
+                    } catch (e) {
+                      // error already set
+                    }
                   }}
-                  disabled={loading}
+                  disabled={loading || !file || !mobile || mobile.trim().length < 3}
                 >
                   {loading ? <LoadingSpinner /> : 'Upload proof & submit'}
                 </button>

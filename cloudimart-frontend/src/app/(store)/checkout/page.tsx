@@ -1,4 +1,3 @@
-// src/app/(store)/checkout/page.tsx
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
@@ -73,12 +72,16 @@ export default function CheckoutPage() {
   useEffect(() => {
     (async () => {
       // Load cart first (so we compute a cartHash), then locations/user, then payments filtered by cartHash
-      const computed = await loadCart();
-      await loadLocationsAndUser(computed ?? null);
-      await fetchPayments(computed ?? null, { excludeOrdered: true, onlyPending: true });
-      await fetchOtherPendingPayments(computed ?? null);
-      // Important: compute global reservations after cart loaded
-      await loadAllPendingPayments(computed ?? null);
+      const computed = await loadCart(); // now returns snapshot
+      const itemsSnapshot = computed?.items ?? [];
+      const hash = computed?.hash ?? null;
+
+      await loadLocationsAndUser(hash ?? null);
+      await fetchPayments(hash ?? null, { excludeOrdered: true, onlyPending: true });
+      await fetchOtherPendingPayments(hash ?? null);
+
+      // Important: compute global reservations after cart loaded — pass snapshot to avoid race
+      await loadAllPendingPayments(hash ?? null, itemsSnapshot);
     })();
 
     return () => {
@@ -123,22 +126,25 @@ export default function CheckoutPage() {
     }
   };
 
-  // Load cart items and totals (returns computed cartHash for immediate use)
-  const loadCart = async (): Promise<string | null> => {
+  // Load cart items and totals (returns computed snapshot: { hash, items, total })
+  const loadCart = async (): Promise<{ hash: string | null; items: any[]; total: number } | null> => {
     try {
       const res = await client.get('/api/cart');
       const items = extractArrayFromResponse(res);
-      setCartItems(items);
-      setTotal(items.reduce((sum: number, i: any) => sum + Number(i.product?.price ?? 0) * (i.quantity ?? 1), 0));
+      const computedTotal = items.reduce((sum: number, i: any) => sum + Number(i.product?.price ?? 0) * (i.quantity ?? 1), 0);
       const hash = computeCartHash(items);
-      // set state (async) but also return immediate computed hash for callers
+
+      // update state (non-blocking) but also return the immediate computed snapshot
+      setCartItems(items);
+      setTotal(computedTotal);
       setCartHash(hash);
-      return hash;
+
+      return { hash, items, total: computedTotal };
     } catch (e) {
       setCartItems([]);
       setTotal(0);
       setCartHash(null);
-      return null;
+      return { hash: null, items: [], total: 0 };
     }
   };
 
@@ -166,7 +172,8 @@ export default function CheckoutPage() {
   };
 
   // Fetch all pending payments for the user (global) and compute reservation map
-  const loadAllPendingPayments = async (currentHash: string | null = null) => {
+  // Now accepts cartItemsForCalc to avoid relying on possibly not-yet-updated state
+  const loadAllPendingPayments = async (currentHash: string | null = null, cartItemsForCalc: any[] | null = null) => {
     try {
       const res = await client.get('/api/payments', { params: { only_pending: 1, exclude_ordered: 1 } });
       const payload = res.data?.data ?? res.data ?? [];
@@ -187,8 +194,11 @@ export default function CheckoutPage() {
       });
       setReservedByProduct(reserved);
 
+      // choose the provided snapshot or fall back to state
+      const itemsToUse = Array.isArray(cartItemsForCalc) ? cartItemsForCalc : cartItems;
+
       // compute covered amount (intersection of current cart and reservations)
-      const covered = cartItems.reduce((acc: number, it: any) => {
+      const covered = (itemsToUse ?? []).reduce((acc: number, it: any) => {
         const pid = Number(it.product?.id ?? it.product_id ?? 0);
         const qty = Number(it.quantity ?? it.qty ?? 0);
         const price = Number(it.product?.price ?? it.price ?? 0);
@@ -197,7 +207,9 @@ export default function CheckoutPage() {
         return acc + applicable * price;
       }, 0);
       setCoveredAmount(covered);
-      setRemainingToPay(Math.max(0, total - covered));
+
+      const currentTotal = itemsToUse?.reduce((s: number, i: any) => s + Number(i.product?.price ?? 0) * (i.quantity ?? 1), 0) ?? total;
+      setRemainingToPay(Math.max(0, currentTotal - covered));
     } catch (e) {
       setPendingPayments([]);
       setReservedByProduct({});
@@ -583,44 +595,79 @@ export default function CheckoutPage() {
     }
   };
 
-  // Handle upload proof (include cart_hash)
-  const handleUploadProof = async (formData: FormData) => {
-    setPaymentLoading(true);
-    try {
-      if (cartHash) formData.append('cart_hash', cartHash);
-      if (address && address.trim().length > 0) formData.append('delivery_address', address.trim());
-      const res = await client.post('/api/payment/upload-proof', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+ // src/app/(store)/checkout/page.tsx (replace existing handleUploadProof)
+const handleUploadProof = async (formData: FormData) => {
+  setPaymentLoading(true);
+  try {
+    if (cartHash) formData.append('cart_hash', cartHash);
+    if (address && address.trim().length > 0) formData.append('delivery_address', address.trim());
 
-      const txRef = res.data?.tx_ref ?? res.data?.data?.tx_ref ?? res.data?.payment?.tx_ref ?? null;
+    // IMPORTANT: ensure axios does NOT force a Content-Type (so browser can add boundary)
+    // Passing Content-Type: undefined will override default application/json if it's set globally.
+    const res = await client.post('/api/payment/upload-proof', formData, {
+      // Do not set multipart Content-Type here. Setting to undefined instructs axios
+      // to let the browser set the header with the boundary.
+      headers: { 'Content-Type': undefined as unknown as string },
+    });
 
-      if (!txRef) {
-        throw new Error('Upload succeeded but no tx_ref returned. Contact support.');
+    const txRef = res.data?.tx_ref ?? res.data?.data?.tx_ref ?? res.data?.payment?.tx_ref ?? null;
+    if (!txRef) throw new Error('Upload succeeded but no tx_ref returned. Contact support.');
+
+    setPaymentTxRef(txRef);
+    setPaymentStatus('pending');
+    startPollingPaymentStatus(txRef);
+
+    setModal({ show: true, title: 'Proof uploaded', body: 'Your proof of payment was uploaded. Payment is pending admin approval.' });
+    setShowPaymentModal(false);
+
+    await fetchPayments(cartHash, { excludeOrdered: true, onlyPending: true });
+    await fetchOtherPendingPayments(cartHash);
+    await loadAllPendingPayments(cartHash);
+
+    return { tx_ref: txRef };
+  } catch (err: any) {
+    // Improved logging for debugging
+    console.error('upload-proof error (full err):', err);
+    console.error('upload-proof error (response):', err?.response);
+    console.error('upload-proof error (response.data):', err?.response?.data);
+
+    // Extract server validation messages (Laravel-style: response.data.errors or response.data.message)
+    const respData = err?.response?.data ?? null;
+    let userMessage = err?.message ?? 'Failed to upload proof.';
+
+    if (respData) {
+      // If Laravel returns validation errors object: { errors: { file: ["The file field is required."] } }
+      if (respData.errors && typeof respData.errors === 'object') {
+        const flat: string[] = [];
+        Object.keys(respData.errors).forEach((k) => {
+          const val = respData.errors[k];
+          if (Array.isArray(val)) flat.push(...val);
+          else if (typeof val === 'string') flat.push(val);
+        });
+        if (flat.length > 0) userMessage = flat.join(' — ');
+      } else if (respData.message && typeof respData.message === 'string') {
+        userMessage = respData.message;
+      } else {
+        // fallback: show JSON string of respData (short)
+        try {
+          userMessage = JSON.stringify(respData).slice(0, 400);
+        } catch {
+          userMessage = String(respData);
+        }
       }
-
-      setPaymentTxRef(txRef);
-      setPaymentStatus('pending');
-
-      // start polling for admin approval
-      startPollingPaymentStatus(txRef);
-
-      setModal({ show: true, title: 'Proof uploaded', body: 'Your proof of payment was uploaded. Payment is pending admin approval.' });
-      setShowPaymentModal(false);
-
-      // refresh list for this cart and global list
-      await fetchPayments(cartHash, { excludeOrdered: true, onlyPending: true });
-      await fetchOtherPendingPayments(cartHash);
-      await loadAllPendingPayments(cartHash);
-
-      return { tx_ref: txRef };
-    } catch (err: any) {
-      setModal({ show: true, title: 'Upload failed', body: err?.response?.data?.message ?? err?.message ?? 'Failed to upload proof.' });
-      throw err;
-    } finally {
-      setPaymentLoading(false);
     }
-  };
+
+    setModal({
+      show: true,
+      title: 'Upload failed',
+      body: userMessage,
+    });
+
+    throw err;
+  } finally {
+    setPaymentLoading(false);
+  }
+};
 
   // Place Order (client triggered; server may auto-place when admin approves)
   const placeOrder = async () => {
@@ -668,10 +715,11 @@ export default function CheckoutPage() {
         setModal({ show: true, title: 'Order placed', body: `Order placed — Order ID: ${res.data.order_id ?? '(check orders page)'}\nStatus: ${statusLabel}` });
 
         // refresh cart & payments
-        await loadCart();
+        const computed = await loadCart();
+        const itemsSnapshot = computed?.items ?? [];
         await fetchPayments(null, { excludeOrdered: true, onlyPending: true });
         await fetchOtherPendingPayments(null);
-        await loadAllPendingPayments(null);
+        await loadAllPendingPayments(null, itemsSnapshot);
       } else {
         setModal({ show: true, title: 'Order failed', body: res.data?.message ?? 'Failed to place order' });
       }

@@ -115,7 +115,7 @@ class PaymentController extends Controller
                     'product_id' => $ci->product_id,
                     'name' => $prod ? $prod->name : ($ci->name ?? null),
                     'price' => $price,
-                    'qty' => $qty,
+                    'quantity' => $qty,
                 ];
                 $cartTotal += $price * $qty;
             }
@@ -380,7 +380,7 @@ class PaymentController extends Controller
                         'product_id' => $ci->product_id,
                         'name' => $prod ? $prod->name : ($ci->name ?? null),
                         'price' => $price,
-                        'qty' => $qty,
+                        'quantity' => $qty,
                     ];
                     $cartTotal += $price * $qty;
                 }
@@ -474,14 +474,14 @@ class PaymentController extends Controller
                         return response()->json(['success' => false, 'message' => "Product (ID {$ci['product_id']}) not found"], 400);
                     }
                     $currentStock = intval($productRow->stock ?? 0);
-                    if ($currentStock < intval($ci['qty'])) {
+                    if ($currentStock < intval($ci['quantity'])) {
                         $insufficient[] = [
                             'product_id' => $ci['product_id'],
                             'available' => $currentStock,
-                            'requested' => intval($ci['qty']),
+                            'requested' => intval($ci['quantity']),
                         ];
                     }
-                    $total += floatval($ci['price']) * intval($ci['qty']);
+                    $total += floatval($ci['price']) * intval($ci['quantity']);
                 }
 
                 if (!empty($insufficient)) {
@@ -516,11 +516,11 @@ class PaymentController extends Controller
                     OrderItem::create([
                         'order_id' => $order->id,
                         'product_id' => $ci['product_id'],
-                        'quantity' => $ci['qty'],
+                        'quantity' => $ci['quantity'],
                         'price' => $ci['price'],
                     ]);
 
-                    DB::table('products')->where('id', $ci['product_id'])->decrement('stock', $ci['qty']);
+                    DB::table('products')->where('id', $ci['product_id'])->decrement('stock', $ci['quantity']);
                 }
 
                 // If the user's current cart exactly matches the snapshot, clear it. Otherwise preserve it.
@@ -534,7 +534,7 @@ class PaymentController extends Controller
                     // build snapshot map
                     $snapMap = [];
                     foreach ($cartSnapshot as $s) {
-                        $snapMap[intval($s['product_id'])] = intval($s['qty']);
+                        $snapMap[intval($s['product_id'])] = intval($s['quantity']);
                     }
                     // both must have same keys and same quantities
                     if (count($currentMap) === count($snapMap)) {
