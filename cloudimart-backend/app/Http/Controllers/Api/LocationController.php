@@ -61,6 +61,8 @@ class LocationController extends Controller
      * Validate a point (lat, lng) to see if it's inside any delivery area (polygon or radius),
      * optionally persist a server-trusted verification for the authenticated user,
      * and return the specific detected location.
+     *
+     * Accepts: lat, lng, location_id (optional), cart_hash (optional), delivery_address (optional)
      */
     public function validatePoint(Request $request)
     {
@@ -69,10 +71,23 @@ class LocationController extends Controller
             'lng' => 'required|numeric',
             'location_id' => 'nullable|exists:locations,id',
             'cart_hash' => 'nullable|string',
+            'delivery_address' => 'nullable|string',
         ]);
 
         $lat = (float) $data['lat'];
         $lng = (float) $data['lng'];
+
+        // Debugging log to help trace client requests / tokens
+        Log::info('locations.validate called', [
+            'user_id' => optional($request->user())->id,
+            'has_token' => (bool) $request->bearerToken(),
+            'ip' => $request->ip(),
+            'lat' => $lat,
+            'lng' => $lng,
+            'location_id' => $data['location_id'] ?? null,
+            'cart_hash' => $data['cart_hash'] ?? null,
+            'delivery_address_present' => isset($data['delivery_address']),
+        ]);
 
         // Check if point is within any defined delivery zone
         $insideAny = $this->locationService->isWithinDeliveryZone($lat, $lng);
@@ -99,7 +114,7 @@ class LocationController extends Controller
         // Check if point matches the selected location (if provided)
         $matchesSelected = null;
         if (!empty($data['location_id'])) {
-            $loc = Location::find($data['location_id']); 
+            $loc = Location::find($data['location_id']);
             if ($loc) {
                 $poly = $loc->polygon_coordinates ? json_decode($loc->polygon_coordinates, true) : null;
                 if (!empty($poly) && is_array($poly)) {
@@ -110,7 +125,7 @@ class LocationController extends Controller
                 } else {
                     $matchesSelected = false;
                 }
-            } 
+            }
         }
 
         // If insideAny and user authenticated, persist server-trusted verification
@@ -123,11 +138,14 @@ class LocationController extends Controller
                     'lng' => $lng,
                     'detected_location' => $detected,
                     'cart_hash' => $data['cart_hash'] ?? null,
+                    'delivery_address' => $data['delivery_address'] ?? null,
                 ];
 
                 $user->delivery_verified_at = now();
                 $user->delivery_verified_meta = $meta;
                 $user->save();
+
+                Log::info('Persisted delivery verification', ['user_id' => $user->id, 'meta' => $meta]);
             } catch (\Throwable $e) {
                 // Don't fail the whole validation if persisting the user verification fails;
                 // log for later debugging.
