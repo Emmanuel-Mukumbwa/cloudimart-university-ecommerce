@@ -84,6 +84,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/orders', [OrdersController::class, 'index']);
     Route::get('/orders/count', [OrdersController::class, 'count']);
 
+
     // --- 🔔 Notifications (in-app) --- //
     Route::get('/notifications', [NotificationController::class, 'index']);
     Route::get('/notifications/unread-count', [NotificationController::class, 'unreadCount']);
@@ -110,6 +111,11 @@ Route::prefix('admin')->group(function () {
 
     Route::get('/orders', [AdminController::class, 'orders']);
     Route::post('/orders/{id}/status', [AdminController::class, 'updateOrderStatus']);
+    Route::get('/delivery-people', [AdminController::class, 'deliveryPeople']);
+    Route::post('/deliveries/{id}/assign', [AdminController::class, 'assignDelivery']);
+    Route::post('/deliveries/{id}/unassign', [AdminController::class, 'unassignDelivery']);
+    Route::post('/deliveries/{id}/complete', [AdminController::class, 'completeDelivery']);
+    Route::post('/orders/{orderId}/create-delivery', [AdminController::class, 'createDeliveryForOrder']);
 
     Route::get('/payments', [AdminController::class, 'payments']);
      Route::post('/payments/{id}/approve', [PaymentController::class, 'adminApprove']); 
