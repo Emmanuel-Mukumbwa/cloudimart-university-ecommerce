@@ -34,7 +34,8 @@ use App\Http\Controllers\Api\AdminController;
 // Locations (for dropdown + GPS validation)
 Route::get('/locations', [LocationController::class, 'index']);
 Route::get('/locations/{id}', [LocationController::class, 'show']);
-Route::post('/locations/validate', [LocationController::class, 'validatePoint']);
+//Route::post('/locations/validate', [LocationController::class, 'validatePoint']);
+Route::post('/locations/validate', [LocationController::class, 'validatePoint'])->middleware('auth:sanctum');
 
 // Authentication
 Route::post('/auth/register', [AuthController::class, 'register']);
