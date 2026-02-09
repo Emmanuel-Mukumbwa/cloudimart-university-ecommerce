@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import client from '../../../lib/api/client';
 import { useCart } from '../../../context/CartContext';
 import { useRouter } from 'next/navigation';
-
+ 
 export default function CartPage() {
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);

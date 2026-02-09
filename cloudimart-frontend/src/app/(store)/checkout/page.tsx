@@ -52,9 +52,14 @@ export default function CheckoutPage() {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentLoading, setPaymentLoading] = useState(false);
 
-  // Uploaded proofs (user's payments)
+  // Uploaded proofs (user's payments filtered by cart_hash)
   const [userPayments, setUserPayments] = useState<any[]>([]);
   const [loadingPayments, setLoadingPayments] = useState(false);
+
+  // Other pending payments (global pending payments for this user, possibly different cart_hash)
+  const [otherPendingPayments, setOtherPendingPayments] = useState<any[]>([]);
+  const [showOtherPayments, setShowOtherPayments] = useState(false);
+  const [loadingOtherPayments, setLoadingOtherPayments] = useState(false);
 
   // Verification TTL (1 hour)
   const VERIFICATION_TTL_MS = 1000 * 60 * 60;
@@ -65,6 +70,7 @@ export default function CheckoutPage() {
       const computed = await loadCart();
       await loadLocationsAndUser(computed ?? null);
       await fetchPayments(computed ?? null, { excludeOrdered: true, onlyPending: true });
+      await fetchOtherPendingPayments(computed ?? null);
     })();
 
     return () => {
@@ -148,6 +154,28 @@ export default function CheckoutPage() {
       setUserPayments([]);
     } finally {
       setLoadingPayments(false);
+    }
+  };
+
+  // Fetch all pending payments for the user (global) and keep those not matching current cartHash
+  const fetchOtherPendingPayments = async (currentHash: string | null = null) => {
+    setLoadingOtherPayments(true);
+    try {
+      const params: any = { only_pending: 1, exclude_ordered: 1 };
+      const res = await client.get('/api/payments', { params });
+      const payload = res.data?.data ?? res.data ?? [];
+      const allPending = Array.isArray(payload) ? payload : [];
+      // filter those whose meta.cart_hash !== currentHash
+      const others = allPending.filter((p: any) => {
+        const meta = p.meta ?? {};
+        const ph = meta?.cart_hash ?? null;
+        return ph !== (currentHash ?? cartHash);
+      });
+      setOtherPendingPayments(others);
+    } catch (e) {
+      setOtherPendingPayments([]);
+    } finally {
+      setLoadingOtherPayments(false);
     }
   };
 
@@ -421,6 +449,7 @@ export default function CheckoutPage() {
             setModal({ show: true, title: 'Payment confirmed', body: `Payment confirmed and order created: ${orderId}` });
             // refresh payments and cart (use cartHash + filters)
             await fetchPayments(cartHash, { excludeOrdered: true, onlyPending: true });
+            await fetchOtherPendingPayments(cartHash);
             await loadCart();
             // stop polling
             if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
@@ -471,10 +500,10 @@ export default function CheckoutPage() {
   const handleInitiatePayChangu = async (payload: { amount: number; mobile: string; network: string; delivery_lat?: number; delivery_lng?: number; delivery_address?: string }) => {
     setPaymentLoading(true);
     try {
-      const body = { ...payload, cart_hash: cartHash };
+      const body = { ...payload, cart_hash: cartHash, delivery_address: payload.delivery_address ?? address ?? '' };
       const res = await client.post('/api/payment/initiate', body);
       const checkoutUrl = res.data?.checkout_url ?? res.data?.data?.checkout_url;
-      const txRef = res.data?.tx_ref ?? res.data?.data?.tx_ref ?? null;
+      const txRef = res.data?.tx_ref ?? res.data?.data?.tx_ref ?? res.data?.payment?.tx_ref ?? null;
 
       if (!checkoutUrl || !txRef) {
         throw new Error('Payment initiation failed (no checkout URL or tx_ref returned)');
@@ -488,8 +517,9 @@ export default function CheckoutPage() {
       setModal({ show: true, title: 'Payment started', body: 'PayChangu checkout started in a new tab. Complete payment there. This page will detect confirmation automatically.' });
       setShowPaymentModal(false);
 
-      // refresh payments but filtered to cartHash
-      fetchPayments(cartHash, { excludeOrdered: true, onlyPending: true });
+      // refresh payments but filtered to cartHash and also global pending list
+      await fetchPayments(cartHash, { excludeOrdered: true, onlyPending: true });
+      await fetchOtherPendingPayments(cartHash);
 
       return { checkout_url: checkoutUrl, tx_ref: txRef };
     } catch (err: any) {
@@ -505,11 +535,12 @@ export default function CheckoutPage() {
     setPaymentLoading(true);
     try {
       if (cartHash) formData.append('cart_hash', cartHash);
+      if (address && address.trim().length > 0) formData.append('delivery_address', address.trim());
       const res = await client.post('/api/payment/upload-proof', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
-      const txRef = res.data?.tx_ref ?? res.data?.data?.tx_ref ?? null;
+      const txRef = res.data?.tx_ref ?? res.data?.data?.tx_ref ?? res.data?.payment?.tx_ref ?? null;
 
       if (!txRef) {
         throw new Error('Upload succeeded but no tx_ref returned. Contact support.');
@@ -524,8 +555,9 @@ export default function CheckoutPage() {
       setModal({ show: true, title: 'Proof uploaded', body: 'Your proof of payment was uploaded. Payment is pending admin approval.' });
       setShowPaymentModal(false);
 
-      // refresh list for this cart
-      fetchPayments(cartHash, { excludeOrdered: true, onlyPending: true });
+      // refresh list for this cart and global list
+      await fetchPayments(cartHash, { excludeOrdered: true, onlyPending: true });
+      await fetchOtherPendingPayments(cartHash);
 
       return { tx_ref: txRef };
     } catch (err: any) {
@@ -584,6 +616,7 @@ export default function CheckoutPage() {
         // refresh cart & payments
         await loadCart();
         await fetchPayments(null, { excludeOrdered: true, onlyPending: true });
+        await fetchOtherPendingPayments(null);
       } else {
         setModal({ show: true, title: 'Order failed', body: res.data?.message ?? 'Failed to place order' });
       }
@@ -618,6 +651,9 @@ export default function CheckoutPage() {
     if (p.proof_url) return `/storage/${p.proof_url}`;
     return '/images/placeholder.png';
   };
+
+  // small UI helper: truncated time
+  const niceDate = (d?: string) => (d ? new Date(d).toLocaleString() : '—');
 
   return (
     <div className="container py-5">
@@ -745,7 +781,7 @@ export default function CheckoutPage() {
               {loadingPayments ? (
                 <div className="text-center py-3"><LoadingSpinner /></div>
               ) : userPayments.length === 0 ? (
-                <div className="text-muted small">No payment uploads yet.</div>
+                <div className="text-muted small">No payment uploads yet for this cart.</div>
               ) : (
                 <div className="list-group">
                   {userPayments.map((p) => (
@@ -761,7 +797,7 @@ export default function CheckoutPage() {
                         <div className="d-flex justify-content-between">
                           <div>
                             <div className="fw-semibold">{p.tx_ref}</div>
-                            <div className="small text-muted">{p.created_at ? new Date(p.created_at).toLocaleString() : ''}</div>
+                            <div className="small text-muted">{niceDate(p.created_at)}</div>
                           </div>
                           <div className="text-end">
                             <div className={`badge ${p.status === 'success' ? 'bg-success' : p.status === 'failed' ? 'bg-danger' : 'bg-warning text-dark'}`}>
@@ -777,6 +813,58 @@ export default function CheckoutPage() {
                 </div>
               )}
             </div>
+
+            {/* Other pending payments (different cart snapshot) */}
+            {loadingOtherPayments ? (
+              <div className="mb-3 text-center"><LoadingSpinner /></div>
+            ) : otherPendingPayments.length > 0 ? (
+              <div className="mb-3">
+                <div className="alert alert-warning">
+                  <strong>Note:</strong> You have other pending payment(s) that were made for a different cart snapshot. These payments apply to a previous cart and will be handled separately by admin.
+                  <div className="mt-2">
+                    <button className="btn btn-sm btn-outline-secondary me-2" onClick={() => setShowOtherPayments(!showOtherPayments)}>
+                      {showOtherPayments ? 'Hide' : 'Show'} other pending payments ({otherPendingPayments.length})
+                    </button>
+                    <button className="btn btn-sm btn-outline-dark" onClick={async () => { await fetchOtherPendingPayments(cartHash); await fetchPayments(cartHash); }}>
+                      Refresh
+                    </button>
+                  </div>
+                </div>
+
+                {showOtherPayments && (
+                  <div className="list-group">
+                    {otherPendingPayments.map((p) => (
+                      <div key={p.id ?? p.tx_ref} className="list-group-item d-flex align-items-center gap-3">
+                        <a href={proofHref(p) ?? '#'} target="_blank" rel="noreferrer noopener">
+                          <img
+                            src={proofSrc(p)}
+                            alt={`proof ${p.tx_ref ?? ''}`}
+                            style={{ width: 92, height: 64, objectFit: 'cover', borderRadius: 6 }}
+                          />
+                        </a>
+                        <div className="flex-fill">
+                          <div className="d-flex justify-content-between">
+                            <div>
+                              <div className="fw-semibold">{p.tx_ref}</div>
+                              <div className="small text-muted">{niceDate(p.created_at)}</div>
+                              <div className="small text-muted">Paid amount: MK {(Number(p.amount) || 0).toFixed(2)}</div>
+                              <div className="small text-muted">Cart snapshot: <code className="text-break">{p.meta?.cart_hash ?? '—'}</code></div>
+                            </div>
+                            <div className="text-end">
+                              <div className={`badge ${p.status === 'success' ? 'bg-success' : p.status === 'failed' ? 'bg-danger' : 'bg-warning text-dark'}`}>
+                                {p.status}
+                              </div>
+                              {p.meta?.order_id && <div className="small mt-1">Order: <strong>{p.meta.order_id}</strong></div>}
+                            </div>
+                          </div>
+                          <div className="small text-muted mt-2">{p.meta?.note ?? ''}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
 
             {error && <div className="alert alert-danger">{error}</div>}
 

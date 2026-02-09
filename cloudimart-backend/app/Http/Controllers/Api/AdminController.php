@@ -9,7 +9,7 @@ use App\Models\User;
 use App\Models\Product;
 use App\Models\Category;
 use App\Models\Order;
-use App\Models\OrderItem; 
+use App\Models\OrderItem;
 use App\Models\Payment;
 use App\Models\Delivery;
 use App\Models\Cart;
@@ -36,15 +36,69 @@ class AdminController extends Controller
     }
 
     /**
+     * Helper: normalize payment model to array for API responses.
+     * Adds proof_url_full and ensures meta is decoded as array.
+     */
+    protected function paymentToArray(Payment $p): array
+    {
+        // meta as array
+        $meta = $p->meta;
+        if (!is_array($meta)) {
+            $meta = json_decode($p->meta ?? '[]', true) ?: [];
+        }
+
+        // compute proof_url_full
+        $proofUrlFull = null;
+        if (!empty($p->proof_url)) {
+            $raw = $p->proof_url;
+            if (preg_match('#^https?://#i', $raw) || str_starts_with($raw, '//')) {
+                $proofUrlFull = $raw;
+            } else {
+                try {
+                    $proofUrlFull = Storage::disk('public')->url(ltrim($raw, '/'));
+                } catch (\Throwable $e) {
+                    $proofUrlFull = asset('storage/' . ltrim($raw, '/'));
+                }
+            }
+        }
+
+        // include basic user info if loaded or related
+        $user = null;
+        try {
+            if ($p->relationLoaded('user') || $p->user) {
+                $u = $p->user;
+                if ($u) {
+                    $user = [
+                        'id' => $u->id,
+                        'name' => $u->name,
+                        'email' => $u->email ?? null,
+                    ];
+                }
+            }
+        } catch (\Throwable $e) {
+            $user = null;
+        }
+
+        return [
+            'id' => $p->id,
+            'tx_ref' => $p->tx_ref,
+            'provider_ref' => $p->provider_ref ?? null,
+            'user_id' => $p->user_id ?? null,
+            'user' => $user,
+            'mobile' => $p->mobile ?? null,
+            'amount' => (float) $p->amount,
+            'currency' => $p->currency ?? null,
+            'status' => $p->status,
+            'created_at' => $p->created_at ? $p->created_at->toDateTimeString() : null,
+            'proof_url' => $p->proof_url ?? null,
+            'proof_url_full' => $proofUrlFull,
+            'meta' => $meta,
+        ];
+    }
+
+    /**
      * GET /api/admin/dashboard
-     * Returns dashboard metrics:
-     * - user counts by role
-     * - orders summary (total, pending, pending_delivery, delivered)
-     * - payments summary (sum of successful payments)
-     * - top selling products (top 5)
-     * - recent orders (5 latest)
-     * - pending deliveries
-     * - recent failed payments
+     * Returns dashboard metrics.
      */
     public function dashboard(Request $request)
     {
@@ -118,11 +172,6 @@ class AdminController extends Controller
 
     /**
      * GET /api/admin/users
-     * Users listing (admin). Supports:
-     *  - ?role=admin|user|delivery (filters by role)
-     *  - ?is_active=1|0 (filters by active state)
-     *  - ?exclude_admin=1 (exclude admin accounts from results)
-     *  - pagination
      */
     public function users(Request $request)
     {
@@ -132,7 +181,6 @@ class AdminController extends Controller
         $isActive = $request->query('is_active', null);
         $excludeAdmin = $request->query('exclude_admin', false);
 
-        // Select fields useful for the admin UI and include orders_count as a subquery
         $q = User::query()
             ->select(
                 'users.id',
@@ -149,7 +197,7 @@ class AdminController extends Controller
                 'users.location_verified_at',
                 DB::raw('(SELECT COUNT(*) FROM orders WHERE orders.user_id = users.id) as orders_count')
             )
-            ->with(['location:id,name']); // eager-load location name
+            ->with(['location:id,name']);
 
         if ($role) {
             $q->where('role', $role);
@@ -169,7 +217,6 @@ class AdminController extends Controller
 
     /**
      * POST /api/admin/users
-     * Create user (admin). Accepts role: admin|user|delivery
      */
     public function createUser(Request $request)
     {
@@ -199,7 +246,6 @@ class AdminController extends Controller
 
     /**
      * POST /api/admin/users/{id}/deactivate
-     * Deactivate user (is_active = false)
      */
     public function deactivateUser(Request $request, $id)
     {
@@ -211,7 +257,6 @@ class AdminController extends Controller
 
     /**
      * POST /api/admin/users/{id}/activate
-     * Activate user (is_active = true)
      */
     public function activateUser(Request $request, $id)
     {
@@ -223,8 +268,6 @@ class AdminController extends Controller
 
     /**
      * POST /api/admin/users/{id}/suspend
-     * Compatibility helper: suspend user (sets is_active=false and role='suspended').
-     * Prefer using deactivate/activate endpoints and the is_active flag.
      */
     public function suspendUser(Request $request, $id)
     {
@@ -239,9 +282,8 @@ class AdminController extends Controller
         return response()->json(['success' => true, 'message' => 'User suspended', 'user' => $user]);
     }
 
-        /**
+    /**
      * GET /api/admin/products
-     * Products listing (paginated)
      */
     public function products(Request $request)
     {
@@ -256,14 +298,11 @@ class AdminController extends Controller
 
     /**
      * POST /api/admin/products
-     * Create / update product
-     * Accepts multipart/form-data (optional image file named 'image') or JSON (image_url string)
      */
     public function saveProduct(Request $request)
     {
         $this->ensureAdmin($request->user());
 
-        // allow both multipart and json: validation will adapt
         $rules = [
             'id' => 'nullable|exists:products,id',
             'name' => 'required|string',
@@ -272,27 +311,24 @@ class AdminController extends Controller
             'category_id' => 'required|exists:categories,id',
             'stock' => 'required|integer|min:0',
             'image_url' => 'nullable|string',
-            'image' => 'nullable|image|max:5120', // 5MB
+            'image' => 'nullable|image|max:5120',
         ];
 
         $data = $request->validate($rules);
 
-        // If file uploaded, store it
         $storedPath = null;
         if ($request->hasFile('image')) {
             try {
-                $storedPath = $request->file('image')->store('products', 'public'); // returns e.g. products/xxx.png
+                $storedPath = $request->file('image')->store('products', 'public');
             } catch (Exception $e) {
                 Log::error('Product image store failed: ' . $e->getMessage());
                 return response()->json(['message' => 'Failed to store image'], 500);
             }
         }
 
-        // If updating
         if (!empty($data['id'])) {
             $prod = Product::findOrFail($data['id']);
 
-            // If new image uploaded, delete old image file (if exists)
             if ($storedPath) {
                 if (!empty($prod->image_url)) {
                     try {
@@ -303,9 +339,7 @@ class AdminController extends Controller
                 }
                 $data['image_url'] = $storedPath;
             } else {
-                // If no new file but image_url present in payload (string), keep it; otherwise leave existing image_url
                 if (!array_key_exists('image_url', $data) || $data['image_url'] === null) {
-                    // preserve existing
                     unset($data['image_url']);
                 }
             }
@@ -314,11 +348,9 @@ class AdminController extends Controller
             return response()->json(['success' => true, 'product' => $prod->fresh()], 200);
         }
 
-        // Create new product
         if ($storedPath) {
             $data['image_url'] = $storedPath;
         } else {
-            // allow creating without an image_url
             $data['image_url'] = $data['image_url'] ?? null;
         }
 
@@ -336,7 +368,6 @@ class AdminController extends Controller
 
         $prod = Product::findOrFail($id);
 
-        // delete image file if present
         if (!empty($prod->image_url)) {
             try {
                 Storage::disk('public')->delete($prod->image_url);
@@ -351,7 +382,6 @@ class AdminController extends Controller
 
     /**
      * GET /api/admin/orders
-     * Orders listing with filters (status)
      */
     public function orders(Request $request)
     {
@@ -365,7 +395,6 @@ class AdminController extends Controller
 
     /**
      * POST /api/admin/orders/{id}/status
-     * Update order status (admin)
      */
     public function updateOrderStatus(Request $request, $id)
     {
@@ -382,7 +411,7 @@ class AdminController extends Controller
 
     /**
      * GET /api/admin/payments
-     * Payments listing (admin). Includes user relation for UI convenience.
+     * Paginated and normalized for frontend consumption.
      */
     public function payments(Request $request)
     {
@@ -390,19 +419,27 @@ class AdminController extends Controller
 
         $q = Payment::with(['user:id,name,email'])->orderBy('created_at','desc');
         if ($request->has('status')) $q->where('status', $request->get('status'));
-        $payments = $q->paginate(25);
 
-        return response()->json($payments);
+        $paymentsPaginated = $q->paginate(25);
+
+        $mapped = $paymentsPaginated->getCollection()->map(function ($p) {
+            return $this->paymentToArray($p);
+        })->all();
+
+        // preserve pagination meta
+        $meta = [
+            'current_page' => $paymentsPaginated->currentPage(),
+            'last_page' => $paymentsPaginated->lastPage(),
+            'per_page' => $paymentsPaginated->perPage(),
+            'total' => $paymentsPaginated->total(),
+        ];
+
+        return response()->json(['data' => $mapped, 'meta' => $meta], 200);
     }
 
     /**
      * POST /api/admin/payments/{id}/approve
-     * Admin approves a payment (manual proof). This:
-     *  - marks payment.status => 'success'
-     *  - idempotently attempts to auto-create an order for the payment->user using their cart
-     *  - if successful, sets payment.meta.order_id and returns the created order
-     *
-     * WARNING: this endpoint must be protected by admin auth (we check here).
+     * Admin approves a payment (manual proof). Uses payment.meta.cart_snapshot when present.
      */
     public function approvePayment(Request $request, $id)
     {
@@ -413,22 +450,21 @@ class AdminController extends Controller
             return response()->json(['message' => 'Payment not found'], 404);
         }
 
-        // If already approved, return the payment (idempotent)
         if ($payment->status === 'success') {
-            return response()->json(['message' => 'Payment already approved', 'payment' => $payment], 200);
+            $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
+            return response()->json(['message' => 'Payment already approved', 'payment' => $this->paymentToArray($payment), 'meta' => $meta], 200);
         }
 
         DB::beginTransaction();
         try {
-            // 1) Mark payment as success
+            // mark success (we will roll back if anything fails)
             $payment->status = 'success';
             $payment->save();
 
-            // 2) Auto-place order for the user based on their cart (idempotent)
             $user = $payment->user;
             if (! $user) {
-                DB::commit();
-                return response()->json(['message' => 'Payment approved but payment has no associated user'], 200);
+                DB::rollBack();
+                return response()->json(['message' => 'Payment approved but payment has no associated user'], 400);
             }
 
             // If an order already exists for this payment, attach and return
@@ -444,10 +480,128 @@ class AdminController extends Controller
                 return response()->json(['message' => 'Payment approved; existing order found', 'order' => $existing], 200);
             }
 
-            // fetch cart for user
+            // decode meta safely
+            $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
+            $cartSnapshot = $meta['cart_snapshot'] ?? null;
+            $cartTotalFromMeta = isset($meta['cart_total']) ? floatval($meta['cart_total']) : null;
+
+            if ($cartSnapshot && is_array($cartSnapshot) && count($cartSnapshot) > 0) {
+                // Use snapshot to check stock and compute total
+                $total = 0;
+                $insufficient = [];
+
+                foreach ($cartSnapshot as $ci) {
+                    $productRow = DB::table('products')->where('id', $ci['product_id'])->lockForUpdate()->first();
+                    if (!$productRow) {
+                        DB::rollBack();
+                        return response()->json(['success' => false, 'message' => "Product (ID {$ci['product_id']}) not found"], 400);
+                    }
+                    $currentStock = intval($productRow->stock ?? 0);
+                    if ($currentStock < intval($ci['qty'])) {
+                        $insufficient[] = [
+                            'product_id' => $ci['product_id'],
+                            'available' => $currentStock,
+                            'requested' => intval($ci['qty']),
+                        ];
+                    }
+                    $total += floatval($ci['price']) * intval($ci['qty']);
+                }
+
+                if (!empty($insufficient)) {
+                    $meta['approval_issue'] = ['type' => 'stock', 'items' => $insufficient];
+                    $payment->meta = $meta;
+                    $payment->save();
+                    DB::rollBack();
+                    return response()->json(['success' => false, 'message' => 'Some items are out of stock', 'items' => $insufficient], 409);
+                }
+
+                // verify the payment amount matches snapshot total
+                if (floatval($payment->amount) != floatval($total)) {
+                    $meta['amount_mismatch'] = ['payment' => $payment->amount, 'snapshot_total' => $total];
+                    $payment->meta = $meta;
+                    $payment->save();
+                    DB::rollBack();
+                    return response()->json(['message' => 'Amount mismatch', 'meta' => $meta], 422);
+                }
+
+                // create order from snapshot
+                $orderId = 'ORD-' . date('Ymd') . '-' . strtoupper(Str::random(6));
+                $order = Order::create([
+                    'order_id' => $orderId,
+                    'user_id' => $user->id,
+                    'total' => $total,
+                    'delivery_address' => data_get($payment->meta, 'delivery_address') ?? null,
+                    'status' => 'pending_delivery',
+                    'payment_ref' => $payment->tx_ref,
+                ]);
+
+                foreach ($cartSnapshot as $ci) {
+                    OrderItem::create([
+                        'order_id' => $order->id,
+                        'product_id' => $ci['product_id'],
+                        'quantity' => $ci['qty'],
+                        'price' => $ci['price'],
+                    ]);
+
+                    DB::table('products')->where('id', $ci['product_id'])->decrement('stock', $ci['qty']);
+                }
+
+                // If the user's current cart exactly matches the snapshot, clear it. Otherwise preserve it.
+                $cart = Cart::where('user_id', $user->id)->with('items')->first();
+                $shouldClearCart = false;
+                if ($cart && $cart->items->isNotEmpty()) {
+                    $currentMap = [];
+                    foreach ($cart->items as $ci) {
+                        $currentMap[intval($ci->product_id)] = intval($ci->quantity);
+                    }
+                    $snapMap = [];
+                    foreach ($cartSnapshot as $s) {
+                        $snapMap[intval($s['product_id'])] = intval($s['qty']);
+                    }
+                    if (count($currentMap) === count($snapMap)) {
+                        $allEqual = true;
+                        foreach ($snapMap as $pid => $qty) {
+                            if (!isset($currentMap[$pid]) || $currentMap[$pid] !== $qty) {
+                                $allEqual = false;
+                                break;
+                            }
+                        }
+                        if ($allEqual) {
+                            $shouldClearCart = true;
+                        }
+                    }
+                }
+                if ($shouldClearCart && $cart) {
+                    $cart->items()->delete();
+                }
+
+                // create delivery record
+                $verificationCode = strtoupper(Str::random(6));
+                Delivery::create([
+                    'order_id' => $order->id,
+                    'delivery_person' => null,
+                    'status' => 'pending',
+                    'verification_code' => $verificationCode
+                ]);
+
+                Notification::create([
+                    'user_id' => $user->id,
+                    'title' => 'Order Placed',
+                    'message' => "Your order #{$order->order_id} has been placed (admin-approved payment)."
+                ]);
+
+                $meta['order_id'] = $order->order_id;
+                $payment->meta = $meta;
+                $payment->save();
+
+                DB::commit();
+
+                return response()->json(['message' => 'Payment approved and order created', 'order' => $order, 'payment' => $this->paymentToArray($payment)], 200);
+            }
+
+            // Fallback: no snapshot — use user's current cart (legacy behavior)
             $cart = Cart::where('user_id', $user->id)->with('items.product')->first();
             if (! $cart || $cart->items->isEmpty()) {
-                // no cart — still mark payment success but cannot auto-place
                 $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
                 $meta['note'] = ($meta['note'] ?? '') . ' | No cart found to auto-place order';
                 $payment->meta = $meta;
@@ -456,7 +610,6 @@ class AdminController extends Controller
                 return response()->json(['message' => 'Payment marked success but user cart empty; manual placement required.'], 200);
             }
 
-            // verify amount matches cart total
             $total = 0;
             foreach ($cart->items as $ci) {
                 $total += ($ci->product->price * $ci->quantity);
@@ -472,7 +625,6 @@ class AdminController extends Controller
                 return response()->json(['message' => 'Amount mismatch between payment and cart total. Auto-place aborted.', 'meta' => $meta], 422);
             }
 
-            // stock checks (with locks)
             $insufficient = [];
             foreach ($cart->items as $ci) {
                 $productRow = DB::table('products')->where('id', $ci->product_id)->lockForUpdate()->first();
@@ -500,7 +652,6 @@ class AdminController extends Controller
                 ], 409);
             }
 
-            // Create order id & record
             $orderId = 'ORD-' . date('Ymd') . '-' . strtoupper(Str::random(6));
 
             $order = Order::create([
@@ -512,7 +663,6 @@ class AdminController extends Controller
                 'payment_ref' => $payment->tx_ref,
             ]);
 
-            // create order items & decrement stock
             foreach ($cart->items as $ci) {
                 OrderItem::create([
                     'order_id' => $order->id,
@@ -524,7 +674,6 @@ class AdminController extends Controller
                 DB::table('products')->where('id', $ci->product_id)->decrement('stock', $ci->quantity);
             }
 
-            // create delivery record
             $verificationCode = strtoupper(Str::random(6));
             Delivery::create([
                 'order_id' => $order->id,
@@ -533,17 +682,14 @@ class AdminController extends Controller
                 'verification_code' => $verificationCode
             ]);
 
-            // clear cart items
             $cart->items()->delete();
 
-            // notify user (in-app)
             Notification::create([
                 'user_id' => $user->id,
                 'title' => 'Order Placed',
                 'message' => "Your order #{$order->order_id} has been placed (admin-approved payment)."
             ]);
 
-            // attach order_id to payment.meta
             $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
             $meta['order_id'] = $order->order_id;
             $payment->meta = $meta;
@@ -551,7 +697,7 @@ class AdminController extends Controller
 
             DB::commit();
 
-            return response()->json(['message' => 'Payment approved and order created', 'order' => $order], 200);
+            return response()->json(['message' => 'Payment approved and order created', 'order' => $order, 'payment' => $this->paymentToArray($payment)], 200);
         } catch (Exception $e) {
             DB::rollBack();
             Log::error('admin.approvePayment error: ' . $e->getMessage());
@@ -561,8 +707,6 @@ class AdminController extends Controller
 
     /**
      * POST /api/admin/notify
-     * Send notification (global or per user)
-     * payload: { user_id: optional, title: required, message: required }
      */
     public function notify(Request $request)
     {
@@ -581,7 +725,6 @@ class AdminController extends Controller
                 'message' => $data['message'],
             ]);
         } else {
-            // broadcast to all users (for large datasets, queue this job)
             $users = User::all(['id']);
             foreach ($users as $u) {
                 Notification::create([
@@ -597,7 +740,6 @@ class AdminController extends Controller
 
     /**
      * GET /api/admin/locations
-     * Locations management (list)
      */
     public function locations(Request $request)
     {
@@ -606,4 +748,3 @@ class AdminController extends Controller
         return response()->json($locations);
     }
 }
-
