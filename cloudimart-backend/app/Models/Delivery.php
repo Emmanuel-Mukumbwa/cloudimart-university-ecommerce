@@ -13,18 +13,18 @@ class Delivery extends Model
     /**
      * The attributes that are mass assignable.
      *
-     * delivery_person_id is the FK to users.id (role = 'delivery').
+     * delivery_person_id -> users.id (role = 'delivery')
      */
     protected $fillable = [
         'order_id',
-        'delivery_person',
-        'delivery_person_id',
-        'status', // pending, completed, failed (or 'assigned' if you changed to string)
+        'delivery_person',     // legacy / optional name field
+        'delivery_person_id',  // FK to users table
+        'status',              // pending, assigned, completed, failed
         'verification_code',
     ];
 
     /**
-     * Casts
+     * Cast attributes.
      */
     protected $casts = [
         'created_at' => 'datetime',
@@ -40,7 +40,7 @@ class Delivery extends Model
     }
 
     /**
-     * The delivery person assigned (nullable).
+     * Assigned delivery person (nullable).
      */
     public function deliveryPerson(): BelongsTo
     {
