@@ -99,7 +99,7 @@ class LocationController extends Controller
         // Check if point matches the selected location (if provided)
         $matchesSelected = null;
         if (!empty($data['location_id'])) {
-            $loc = Location::find($data['location_id']);
+            $loc = Location::find($data['location_id']); 
             if ($loc) {
                 $poly = $loc->polygon_coordinates ? json_decode($loc->polygon_coordinates, true) : null;
                 if (!empty($poly) && is_array($poly)) {
