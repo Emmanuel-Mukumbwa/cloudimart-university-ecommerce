@@ -121,6 +121,9 @@ Route::prefix('admin')->group(function () {
      Route::post('/payments/{id}/approve', [PaymentController::class, 'adminApprove']); 
     Route::post('/notify', [AdminController::class, 'notify']);
     Route::get('/locations', [AdminController::class, 'locations']);
+    
+Route::get('/summary', [AdminController::class, 'summary']);
+
 });
 });
 
