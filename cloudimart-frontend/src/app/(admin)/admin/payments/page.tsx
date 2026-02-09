@@ -44,6 +44,11 @@ export default function AdminPaymentsPage() {
   const [approving, setApproving] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  // reject modal state
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejecting, setRejecting] = useState(false);
+
   // cart detail modal state
   const [cartModal, setCartModal] = useState<{ show: boolean; title?: string; items?: SnapshotItem[] }>({ show: false });
 
@@ -66,6 +71,7 @@ export default function AdminPaymentsPage() {
 
   useEffect(() => { load(); }, [filter]);
 
+  // Approve flow
   const openConfirm = (p: Payment) => {
     setSelectedPayment(p);
     setConfirmOpen(true);
@@ -79,21 +85,47 @@ export default function AdminPaymentsPage() {
 
     try {
       const res = await client.post(`/api/admin/payments/${selectedPayment.id}/approve`);
-      const order = res.data?.order ?? null;
       setSuccessMessage(res.data?.message ?? 'Payment approved.');
 
       // Refresh list
       await load();
-      // keep confirm modal open a short moment to show success, then close
       setTimeout(() => {
         setConfirmOpen(false);
         setSelectedPayment(null);
         setApproving(false);
-      }, 800);
+      }, 700);
     } catch (err: any) {
       console.error('Approve error', err);
       setMessage(err?.response?.data?.message ?? err?.message ?? 'Failed to approve payment');
       setApproving(false);
+    }
+  };
+
+  // Reject flow
+  const openReject = (p: Payment) => {
+    setSelectedPayment(p);
+    setRejectReason('');
+    setRejectOpen(true);
+  };
+
+  const doReject = async () => {
+    if (!selectedPayment) return;
+    setRejecting(true);
+    setMessage(null);
+    try {
+      const res = await client.post(`/api/admin/payments/${selectedPayment.id}/reject`, { reason: rejectReason || null });
+      setSuccessMessage(res.data?.message ?? 'Payment rejected.');
+      // Refresh
+      await load();
+      setTimeout(() => {
+        setRejectOpen(false);
+        setSelectedPayment(null);
+        setRejecting(false);
+      }, 600);
+    } catch (err: any) {
+      console.error('Reject error', err);
+      setMessage(err?.response?.data?.message ?? err?.message ?? 'Failed to reject payment');
+      setRejecting(false);
     }
   };
 
@@ -125,7 +157,6 @@ export default function AdminPaymentsPage() {
     const meta = parseMeta(p.meta);
     const candidates = meta?.cart_snapshot ?? meta?.cart_items ?? meta?.items ?? meta?.snapshot ?? null;
     if (Array.isArray(candidates)) return candidates;
-    // sometimes meta may directly contain order line items keyed differently
     if (Array.isArray(meta?.order_items)) return meta.order_items;
     return [];
   };
@@ -227,10 +258,11 @@ export default function AdminPaymentsPage() {
                       {p.meta?.order_id && <div className="small mt-1">Order: <strong>{p.meta.order_id}</strong></div>}
                     </td>
                     <td>{p.created_at ? new Date(p.created_at).toLocaleString() : '—'}</td>
-                    <td style={{ minWidth: 140 }}>
+                    <td style={{ minWidth: 180 }}>
                       {p.status === 'pending' ? (
                         <div className="d-flex gap-2">
                           <button className="btn btn-sm btn-outline-primary" onClick={()=>openConfirm(p)}>Approve</button>
+                          <button className="btn btn-sm btn-outline-danger" onClick={()=>openReject(p)}>Reject</button>
                           <button className="btn btn-sm btn-outline-secondary" onClick={load}>Refresh</button>
                         </div>
                       ) : (
@@ -268,6 +300,37 @@ export default function AdminPaymentsPage() {
         onClose={doApprove}
         onCancel={() => { setConfirmOpen(false); setSelectedPayment(null); }}
         okLabel={approving ? 'Approving...' : 'Yes, approve'}
+        size="md"
+      />
+
+      {/* Reject modal */}
+      <CenteredModal
+        show={rejectOpen}
+        title={selectedPayment ? `Reject payment ${selectedPayment.tx_ref}` : 'Reject payment'}
+        body={
+          selectedPayment ? (
+            <div>
+              <p>Provide a reason for rejecting this payment (optional). The customer will be notified.</p>
+              <p className="small text-muted">TX: {selectedPayment.tx_ref} — Amount: MK {Number(selectedPayment.amount).toFixed(2)}</p>
+
+              <div className="mt-2">
+                <textarea className="form-control" rows={4} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="Reason for rejection (optional)"></textarea>
+              </div>
+
+              {selectedPayment.proof_url && (
+                <div className="text-center mt-3">
+                  <a href={selectedPayment.proof_url_full ?? `/storage/${selectedPayment.proof_url}`} target="_blank" rel="noreferrer">
+                    <img src={selectedPayment.proof_url_full ?? `/storage/${selectedPayment.proof_url}`} alt="proof"
+                         style={{ maxWidth: '320px', width: '100%', objectFit: 'contain', borderRadius: 8 }} />
+                  </a>
+                </div>
+              )}
+            </div>
+          ) : 'Confirm rejection'
+        }
+        onClose={doReject}
+        onCancel={() => { setRejectOpen(false); setSelectedPayment(null); }}
+        okLabel={rejecting ? 'Rejecting...' : 'Yes, reject'}
         size="md"
       />
 

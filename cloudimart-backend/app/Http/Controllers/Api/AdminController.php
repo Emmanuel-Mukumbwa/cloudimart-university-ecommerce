@@ -812,6 +812,62 @@ public function completeDelivery(Request $request, $id)
     }
 
     /**
+ * POST /api/admin/payments/{id}/reject
+ * Admin rejects a payment (manual rejection).
+ * Body: { reason?: string }
+ */
+public function rejectPayment(Request $request, $id)
+{
+    $this->ensureAdmin($request->user());
+
+    $data = $request->validate([
+        'reason' => 'nullable|string|max:1000',
+    ]);
+
+    $payment = Payment::find($id);
+    if (! $payment) {
+        return response()->json(['message' => 'Payment not found'], 404);
+    }
+
+    // If already failed, return early
+    if ($payment->status === 'failed') {
+        $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
+        return response()->json(['message' => 'Payment already rejected', 'payment' => $this->paymentToArray($payment), 'meta' => $meta], 200);
+    }
+
+    DB::beginTransaction();
+    try {
+        $payment->status = 'failed';
+
+        // update meta safely
+        $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
+        $meta['rejected_by_admin_id'] = $request->user()->id ?? null;
+        $meta['rejected_reason'] = $data['reason'] ?? null;
+        $meta['rejected_at'] = now()->toDateTimeString();
+        $payment->meta = $meta;
+        $payment->save();
+
+        // notify user if present
+        if ($payment->user_id) {
+            Notification::create([
+                'user_id' => $payment->user_id,
+                'title' => 'Payment rejected',
+                'message' => 'Your payment (' . ($payment->tx_ref ?? '') . ') was rejected by admin.' . ($data['reason'] ? ' Reason: ' . $data['reason'] : ''),
+            ]);
+        }
+
+        DB::commit();
+
+        return response()->json(['success' => true, 'message' => 'Payment rejected', 'payment' => $this->paymentToArray($payment)], 200);
+    } catch (\Throwable $e) {
+        DB::rollBack();
+        Log::error('admin.rejectPayment error', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+        return response()->json(['message' => 'Failed to reject payment'], 500);
+    }
+}
+
+
+    /**
      * POST /api/admin/notify
      */
     public function notify(Request $request)
