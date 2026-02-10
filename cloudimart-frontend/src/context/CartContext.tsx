@@ -12,7 +12,7 @@ type CartContextType = {
 
 const CartContext = createContext<CartContextType>({
   count: 0,
-  refreshCart: async () => {},
+  refreshCart: async () => {}, 
   addToCart: async () => {},
 });
 

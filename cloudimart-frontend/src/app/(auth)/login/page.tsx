@@ -1,4 +1,5 @@
 // src/app/(auth)/login/page.tsx
+// src/app/(auth)/login/page.tsx
 'use client';
 
 import React, { useState } from 'react';
@@ -11,19 +12,35 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [redirectUrl, setRedirectUrl] = useState<string | null>(null);
+
+  // field-level errors (improve messages under inputs)
+  const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string; general?: string }>({});
 
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectQuery = searchParams?.get('redirect') ?? '/';
 
+  // basic client-side validation helpers
+  const validateBeforeSubmit = (): boolean => {
+    const errs: typeof fieldErrors = {};
+    if (!email) errs.email = 'Please enter your email';
+    else if (!/^\S+@\S+\.\S+$/.test(email)) errs.email = 'Please enter a valid email address';
+    if (!password) errs.password = 'Please enter your password';
+    else if (password.length < 6) errs.password = 'Password must be at least 6 characters';
+    setFieldErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-    setLoading(true);
+    setFieldErrors({});
+    setShowModal(false);
 
+    if (!validateBeforeSubmit()) return;
+
+    setLoading(true);
     try {
       const res = await client.post('/api/auth/login', { email, password });
 
@@ -52,12 +69,38 @@ export default function LoginPage() {
       // Inform other windows/components
       window.dispatchEvent(new Event('authChanged'));
 
-      // Save redirect, show success modal
+      // Success modal
       setRedirectUrl(redirect_url || '/');
       setShowModal(true);
     } catch (err: any) {
-      console.error(err);
-      setError(err?.response?.data?.message || err?.userMessage || 'Login failed. Check your credentials.');
+      console.error('Login error', err?.response ?? err);
+
+      const resp = err?.response?.data ?? null;
+      // Validation errors (422) - map to fields
+      if (resp && resp.errors && typeof resp.errors === 'object') {
+        const newFieldErrs: typeof fieldErrors = {};
+        Object.keys(resp.errors).forEach((k) => {
+          const v = resp.errors[k];
+          if (Array.isArray(v) && v.length) newFieldErrs[k as keyof typeof newFieldErrs] = v[0];
+          else if (typeof v === 'string') newFieldErrs[k as keyof typeof newFieldErrs] = v;
+        });
+        setFieldErrors(newFieldErrs);
+        return;
+      }
+
+      // Auth failure messages
+      if (err?.response?.status === 401) {
+        setFieldErrors({ general: 'Incorrect email or password. Please try again.' });
+      } else if (err?.response?.status === 403) {
+        // e.g. deactivated account
+        setFieldErrors({ general: resp?.message ?? 'Your account is not allowed to login. Contact support.' });
+      } else if (err?.response?.status === 429) {
+        setFieldErrors({ general: 'Too many attempts. Try again later.' });
+      } else if (resp && resp.message) {
+        setFieldErrors({ general: resp.message });
+      } else {
+        setFieldErrors({ general: 'Login failed. Please check your credentials and try again.' });
+      }
     } finally {
       setLoading(false);
     }
@@ -76,34 +119,36 @@ export default function LoginPage() {
             <div className="card-body">
               <h3 className="mb-4 text-center fw-bold">Login</h3>
 
-              {error && <div className="alert alert-danger">{error}</div>}
+              {/* general error */}
+              {fieldErrors.general && <div className="alert alert-danger">{fieldErrors.general}</div>}
 
-              <form onSubmit={handleSubmit}>
+              <form onSubmit={handleSubmit} noValidate>
                 <div className="mb-3">
                   <input
                     type="email"
-                    className="form-control"
+                    className={`form-control ${fieldErrors.email ? 'is-invalid' : ''}`}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="Email"
-                    required
+                    aria-invalid={!!fieldErrors.email}
                   />
+                  {fieldErrors.email && <div className="invalid-feedback">{fieldErrors.email}</div>}
                 </div>
 
                 <div className="mb-4">
                   <input
                     type="password"
-                    className="form-control"
+                    className={`form-control ${fieldErrors.password ? 'is-invalid' : ''}`}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="Password"
-                    required
+                    aria-invalid={!!fieldErrors.password}
                   />
+                  {fieldErrors.password && <div className="invalid-feedback">{fieldErrors.password}</div>}
                 </div>
 
                 <button type="submit" className="btn btn-primary w-100" disabled={loading}>
                   {loading ? (
-                    // small spinner inline for button
                     <span className="d-inline-flex align-items-center gap-2">
                       <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true" />
                       Signing in...
@@ -127,14 +172,14 @@ export default function LoginPage() {
         </div>
       </div>
 
-      {/* Success modal (re-using CenteredModal) */}
+      {/* Success modal */}
       <CenteredModal
         show={showModal}
-        title="Login Successful"
+        title="Login successful"
         body={
           <div className="text-center">
             <p>Welcome back to <strong>Cloudimart</strong>!</p>
-            <p>You’ll be redirected shortly.</p>
+            <p className="small text-muted">You’ll be redirected shortly.</p>
           </div>
         }
         onClose={handleModalOk}

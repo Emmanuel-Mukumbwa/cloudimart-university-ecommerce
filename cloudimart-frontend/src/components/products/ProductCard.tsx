@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCart } from '../../context/CartContext';
 import CenteredModal from '../common/CenteredModal';
+import client from '../../lib/api/client';
 
 export default function ProductCard({ product }: { product: any }) {
   const { addToCart } = useCart();
@@ -12,6 +13,11 @@ export default function ProductCard({ product }: { product: any }) {
   const [showViewModal, setShowViewModal] = useState(false);
   const [showAddedModal, setShowAddedModal] = useState(false);
   const [adding, setAdding] = useState(false);
+
+  // NEW: state for pending payments blocking add-to-cart
+  const [hasPending, setHasPending] = useState(false);
+  const [pendingHash, setPendingHash] = useState<string | null>(null);
+  const [checkingPending, setCheckingPending] = useState(true);
 
   const router = useRouter();
 
@@ -34,10 +40,65 @@ export default function ProductCard({ product }: { product: any }) {
 
   const imgSrc = getImageSrc(product);
 
+  // Check for pending payment(s) on mount
+  useEffect(() => {
+    let mounted = true;
+    setCheckingPending(true);
+
+    (async () => {
+      try {
+        const res = await client.get('/api/payments', { params: { only_pending: 1, exclude_ordered: 1 } });
+        const payload = res.data?.data ?? res.data ?? [];
+        const arr = Array.isArray(payload) ? payload : [];
+
+        if (!mounted) return;
+        if (arr.length > 0) {
+          // there is at least one pending non-ordered payment
+          setHasPending(true);
+          const first = arr[0];
+          const meta = first?.meta ?? null;
+          const h = meta?.cart_hash ?? null;
+          setPendingHash(h ?? null);
+        } else {
+          setHasPending(false);
+          setPendingHash(null);
+        }
+      } catch (e) {
+        // network error -> treat as no pending (fail open), log for debugging
+        console.warn('Failed to check pending payments', e);
+        setHasPending(false);
+        setPendingHash(null);
+      } finally {
+        if (mounted) setCheckingPending(false);
+      }
+    })();
+
+    return () => { mounted = false; };
+  }, []);
+
   const handleAdd = async () => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
     if (!token) {
       setShowLoginModal(true);
+      return;
+    }
+
+    if (checkingPending) {
+      // still verifying — be defensive
+      setShowAddedModal(false);
+      setShowLoginModal(false);
+      setShowViewModal(false);
+      setAdding(false);
+      setShowLoginModal(true); // we reuse login modal as a simple blocker here
+      return;
+    }
+
+    if (hasPending) {
+      // show a friendly modal informing the user they must resolve pending payment
+      setShowAddedModal(false);
+      setShowLoginModal(false);
+      setShowViewModal(false);
+      setShowPendingModal();
       return;
     }
 
@@ -46,10 +107,29 @@ export default function ProductCard({ product }: { product: any }) {
       await addToCart(product.id, 1);
       setShowAddedModal(true);
     } catch (err: any) {
-      setShowLoginModal(true);
+      // if addToCart fails with 409 from server guard, show friendly message
+      const status = err?.response?.status ?? null;
+      if (status === 409) {
+        const pendingHashServer = err?.response?.data?.pending_cart_hash ?? null;
+        setPendingHash(pendingHashServer ?? pendingHash);
+        setHasPending(true);
+        setShowPendingModal();
+      } else {
+        // fallback: prompt login if unauthorized
+        setShowLoginModal(true);
+      }
     } finally {
       setAdding(false);
     }
+  };
+
+  // small helper to show a pending-payment modal
+  const setShowPendingModal = () => {
+    setShowLoginModal(false);
+    setShowAddedModal(false);
+    setShowViewModal(false);
+    // use login modal component to show a message but with different title/body
+    setShowLoginModal(true);
   };
 
   const openView = () => setShowViewModal(true);
@@ -62,13 +142,33 @@ export default function ProductCard({ product }: { product: any }) {
       return;
     }
 
+    if (checkingPending) {
+      setShowViewModal(false);
+      setShowLoginModal(true);
+      return;
+    }
+
+    if (hasPending) {
+      setShowViewModal(false);
+      setShowPendingModal();
+      return;
+    }
+
     try {
       setAdding(true);
       await addToCart(product.id, 1);
       setShowViewModal(false);
       setShowAddedModal(true);
     } catch (err: any) {
-      setShowLoginModal(true);
+      const status = err?.response?.status ?? null;
+      if (status === 409) {
+        const pendingHashServer = err?.response?.data?.pending_cart_hash ?? null;
+        setPendingHash(pendingHashServer ?? pendingHash);
+        setHasPending(true);
+        setShowPendingModal();
+      } else {
+        setShowLoginModal(true);
+      }
     } finally {
       setAdding(false);
     }
@@ -103,9 +203,10 @@ export default function ProductCard({ product }: { product: any }) {
           <button
             className="btn-add btn btn-primary btn-sm"
             onClick={handleAdd}
-            disabled={adding || (product.stock ?? 0) <= 0}
+            disabled={adding || (product.stock ?? 0) <= 0 || hasPending}
+            title={hasPending ? `You have a pending payment${pendingHash ? ` (${pendingHash})` : ''}. Resolve before adding.` : undefined}
           >
-            {product.stock <= 0 ? 'Out of stock' : adding ? 'Adding...' : 'Add To Cart'}
+            {product.stock <= 0 ? 'Out of stock' : hasPending ? 'Pending payment' : adding ? 'Adding...' : 'Add To Cart'}
           </button>
         </div>
       </article>
@@ -142,21 +243,35 @@ export default function ProductCard({ product }: { product: any }) {
         cancelLabel="Close"
       />
 
-      {/* login modal */}
+      {/* pending/login modal (uses same modal component but worded differently) */}
       <CenteredModal
         show={showLoginModal}
-        title="Login required"
-        body="Please sign in to add items to your cart or view protected pages. Would you like to sign in now?"
+        title={hasPending ? 'Pending payment exists' : 'Login required'}
+        body={
+          hasPending
+            ? (
+              <div>
+                <p className="mb-2">You have a pending payment{pendingHash ? ` (cart ${pendingHash})` : ''}. Please wait for admin approval or cancel the pending payment before adding new items.</p>
+                <p className="small text-muted">If you believe this is an error contact support.</p>
+              </div>
+            )
+            : 'Please sign in to add items to your cart or view protected pages. Would you like to sign in now?'
+        }
         onClose={() => {
-          const redirect = `/products/${product.id}`;
-          router.push(`/login?redirect=${encodeURIComponent(redirect)}`);
+          if (!hasPending) {
+            const redirect = `/products/${product.id}`;
+            router.push(`/login?redirect=${encodeURIComponent(redirect)}`);
+          } else {
+            // simply close modal when it's a pending-notice
+            setShowLoginModal(false);
+          }
         }}
         onCancel={() => setShowLoginModal(false)}
-        okLabel="Sign in"
+        okLabel={hasPending ? 'Okay' : 'Sign in'}
         cancelLabel="Cancel"
       />
 
-      {/* added */}
+      {/* added success modal */}
       <CenteredModal
         show={showAddedModal}
         title="Added to cart"
@@ -184,4 +299,3 @@ export default function ProductCard({ product }: { product: any }) {
     </>
   );
 }
- 

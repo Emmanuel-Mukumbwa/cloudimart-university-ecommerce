@@ -1,3 +1,4 @@
+// src/app/(store)/checkout/page.tsx
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
@@ -5,8 +6,8 @@ import client from '../../../lib/api/client';
 import { useRouter } from 'next/navigation';
 import CenteredModal from '../../../components/common/CenteredModal';
 import LoadingSpinner from '../../../components/common/LoadingSpinner';
-import CartTable from '../../../components/checkout/CartTable';
 import PaymentModal from '../../../components/checkout/PaymentModal';
+import PaymentButtons from '../../../components/checkout/PaymentButtons';
 
 type Loc = {
   id: number;
@@ -18,6 +19,9 @@ type Loc = {
 
 export default function CheckoutPage() {
   const router = useRouter();
+
+  // Loading flags
+  const [initialLoading, setInitialLoading] = useState(true);
 
   // Cart + totals
   const [cartItems, setCartItems] = useState<any[]>([]);
@@ -51,40 +55,50 @@ export default function CheckoutPage() {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentLoading, setPaymentLoading] = useState(false);
 
-  // Uploaded proofs (user's payments filtered by cart_hash)
+  // Payment modal context (which snapshot/cart the modal is currently targeting)
+  const [paymentModalContext, setPaymentModalContext] = useState<{ cart_hash?: string | null; amount?: number } | null>(null);
+
+  // all non-ordered payments (pending + failed) — used to group by cart_hash
+  const [allNonOrderedPayments, setAllNonOrderedPayments] = useState<any[]>([]);
+  const [loadingAllPayments, setLoadingAllPayments] = useState(false);
+
+  // User payments for current cart (all statuses)
   const [userPayments, setUserPayments] = useState<any[]>([]);
   const [loadingPayments, setLoadingPayments] = useState(false);
 
-  // Other pending payments (different cart snapshot)
-  const [otherPendingPayments, setOtherPendingPayments] = useState<any[]>([]);
-  const [showOtherPayments, setShowOtherPayments] = useState(false);
-  const [loadingOtherPayments, setLoadingOtherPayments] = useState(false);
-
-  // Global pending payments & reservation map
-  const [pendingPayments, setPendingPayments] = useState<any[]>([]);
-  const [reservedByProduct, setReservedByProduct] = useState<Record<number, number>>({});
+  // Pending-reservation diagnostics
+  const [reservedByProduct, setReservedByProduct] = useState<Record<string, number>>({});
   const [coveredAmount, setCoveredAmount] = useState<number>(0);
   const [remainingToPay, setRemainingToPay] = useState<number>(0);
 
   // Verification TTL (1 hour)
   const VERIFICATION_TTL_MS = 1000 * 60 * 60;
 
+  // --- lifecycle: initial load ---
   useEffect(() => {
+    let mounted = true;
+
     (async () => {
-      // Load cart first (so we compute a cartHash), then locations/user, then payments filtered by cartHash
-      const computed = await loadCart(); // now returns snapshot
-      const itemsSnapshot = computed?.items ?? [];
-      const hash = computed?.hash ?? null;
+      setInitialLoading(true);
+      try {
+        // Load cart first (so we compute a cartHash), then locations/user, then payments filtered by cartHash
+        const computed = await loadCart(); // now returns snapshot
+        const itemsSnapshot = computed?.items ?? [];
+        const hash = computed?.hash ?? null;
 
-      await loadLocationsAndUser(hash ?? null);
-      await fetchPayments(hash ?? null, { excludeOrdered: true, onlyPending: true });
-      await fetchOtherPendingPayments(hash ?? null);
+        await loadLocationsAndUser(hash ?? null);
+        await fetchUserPayments(hash ?? null);
+        await fetchAllNonOrderedPayments();
 
-      // Important: compute global reservations after cart loaded — pass snapshot to avoid race
-      await loadAllPendingPayments(hash ?? null, itemsSnapshot);
+        // Important: compute global reservations after cart loaded — pass snapshot to avoid race
+        await loadAllPendingPayments(hash ?? null, itemsSnapshot);
+      } finally {
+        if (mounted) setInitialLoading(false);
+      }
     })();
 
     return () => {
+      mounted = false;
       if (pollingRef.current) {
         window.clearInterval(pollingRef.current);
       }
@@ -149,19 +163,15 @@ export default function CheckoutPage() {
   };
 
   // Fetch user's payment uploads & statuses (optionally filtered by cartHash)
-  const fetchPayments = async (
-    filterHash: string | null = null,
-    opts: { excludeOrdered?: boolean; onlyPending?: boolean } = { excludeOrdered: true, onlyPending: true }
-  ) => {
+  const fetchUserPayments = async (filterHash: string | null = null) => {
     setLoadingPayments(true);
     try {
       const effectiveHash = filterHash ?? cartHash ?? null;
       const params: any = {};
       if (effectiveHash) params.cart_hash = effectiveHash;
-      if (opts.excludeOrdered) params.exclude_ordered = 1;
-      if (opts.onlyPending) params.only_pending = 1;
+      // don't force only_pending here; we want pending+failed+success for display
+      params.exclude_ordered = 1;
       const res = await client.get('/api/payments', { params });
-      // safe extraction: prefer res.data.data then res.data
       const payload = res.data?.data ?? res.data ?? [];
       setUserPayments(Array.isArray(payload) ? payload : []);
     } catch (e) {
@@ -171,73 +181,135 @@ export default function CheckoutPage() {
     }
   };
 
-  // Fetch all pending payments for the user (global) and compute reservation map
-  // Now accepts cartItemsForCalc to avoid relying on possibly not-yet-updated state
+  // Fetch all non-ordered payments (pending + failed) for grouping & display
+  const fetchAllNonOrderedPayments = async () => {
+    setLoadingAllPayments(true);
+    try {
+      const res = await client.get('/api/payments', { params: { exclude_ordered: 1 } });
+      const payload = res.data?.data ?? res.data ?? [];
+      const arr = Array.isArray(payload) ? payload : [];
+      setAllNonOrderedPayments(arr);
+    } catch (e) {
+      setAllNonOrderedPayments([]);
+    } finally {
+      setLoadingAllPayments(false);
+    }
+  };
+
+  // Helper: composite key for snapshot item
+  const keyForSnapshotItem = (si: any) => {
+    const pid = si?.product_id ?? si?.productId ?? si?.id ?? null;
+    if (pid && Number(pid) > 0) return `id:${Number(pid)}`;
+    const name = (si?.name ?? si?.product_name ?? si?.title ?? '').toString().trim().toLowerCase();
+    if (name) return `name:${name}`;
+    return null;
+  };
+
+  // --- IMPORTANT CHANGE ---
+  // Fetch all pending payments for the user (global) and compute reservation map,
+  // but only count reservations from payments that apply to the current cart (matching cart_hash).
+  // Reservations are keyed by composite keys (id:<id> or name:<normalized-name>) to avoid accidental mixing.
   const loadAllPendingPayments = async (currentHash: string | null = null, cartItemsForCalc: any[] | null = null) => {
     try {
       const res = await client.get('/api/payments', { params: { only_pending: 1, exclude_ordered: 1 } });
       const payload = res.data?.data ?? res.data ?? [];
       const payments = Array.isArray(payload) ? payload : [];
-      setPendingPayments(payments);
 
-      const reserved: Record<number, number> = {};
+      const reservedMap: Record<string, number> = {};
+
+      // Only include payments whose meta.cart_hash equals currentHash (strict equality),
+      // otherwise treat them as other pending payments.
       payments.forEach((p: any) => {
-        const snapshot = p.meta?.cart_snapshot ?? null;
-        if (Array.isArray(snapshot)) {
-          snapshot.forEach((si: any) => {
-            const pid = Number(si.product_id ?? 0);
-            const qty = Number(si.quantity ?? 0);
-            if (!pid || qty <= 0) return;
-            reserved[pid] = (reserved[pid] ?? 0) + qty;
-          });
-        }
+        const meta = p.meta ?? {};
+        const ph = meta?.cart_hash ?? null;
+        if (currentHash && ph !== currentHash) return; // skip reservations for other carts
+        // only count pending payments (server filter should already ensure status pending, but double-check)
+        if ((p.status ?? '').toString() !== 'pending') return;
+
+        const snapshot = Array.isArray(meta?.cart_snapshot) ? meta.cart_snapshot : [];
+        snapshot.forEach((si: any) => {
+          const key = keyForSnapshotItem(si);
+          if (!key) return;
+          const qty = Number(si.quantity ?? si.qty ?? 0);
+          if (!qty || qty <= 0) return;
+          reservedMap[key] = (reservedMap[key] ?? 0) + qty;
+        });
       });
-      setReservedByProduct(reserved);
+
+      setReservedByProduct(reservedMap);
 
       // choose the provided snapshot or fall back to state
       const itemsToUse = Array.isArray(cartItemsForCalc) ? cartItemsForCalc : cartItems;
 
-      // compute covered amount (intersection of current cart and reservations)
+      // compute covered amount only from reservations that belong to current cart using composite keys
       const covered = (itemsToUse ?? []).reduce((acc: number, it: any) => {
-        const pid = Number(it.product?.id ?? it.product_id ?? 0);
-        const qty = Number(it.quantity ?? it.qty ?? 0);
-        const price = Number(it.product?.price ?? it.price ?? 0);
-        const r = reserved[pid] ?? 0;
-        const applicable = Math.min(qty, r);
-        return acc + applicable * price;
+        const snapItem = {
+          product_id: Number(it.product?.id ?? it.product_id ?? 0),
+          name: it.product?.name ?? it.name ?? '',
+          price: Number(it.product?.price ?? it.price ?? 0),
+          quantity: Number(it.quantity ?? it.qty ?? 0),
+        };
+        const key = keyForSnapshotItem(snapItem);
+        if (!key) return acc;
+        const r = reservedMap[key] ?? 0;
+        const applicable = Math.min(snapItem.quantity ?? 0, r);
+        return acc + applicable * (snapItem.price ?? 0);
       }, 0);
       setCoveredAmount(covered);
 
       const currentTotal = itemsToUse?.reduce((s: number, i: any) => s + Number(i.product?.price ?? 0) * (i.quantity ?? 1), 0) ?? total;
       setRemainingToPay(Math.max(0, currentTotal - covered));
     } catch (e) {
-      setPendingPayments([]);
       setReservedByProduct({});
       setCoveredAmount(0);
       setRemainingToPay(total);
     }
   };
 
-  // Fetch other pending payments for user (those with different cart_hash)
-  const fetchOtherPendingPayments = async (currentHash: string | null = null) => {
-    setLoadingOtherPayments(true);
-    try {
-      const params: any = { only_pending: 1, exclude_ordered: 1 };
-      const res = await client.get('/api/payments', { params });
-      const payload = res.data?.data ?? res.data ?? [];
-      const allPending = Array.isArray(payload) ? payload : [];
-      // filter those whose meta.cart_hash !== currentHash
-      const others = allPending.filter((p: any) => {
-        const meta = p.meta ?? {};
-        const ph = meta?.cart_hash ?? null;
-        return ph !== (currentHash ?? cartHash);
+  // Grouping & snapshot helpers
+  const groupPaymentsByCartHash = (payments: any[]) => {
+    const map = new Map<string, any[]>();
+    payments.forEach((p) => {
+      const hash = p?.meta?.cart_hash ? String(p.meta.cart_hash) : '__no_hash__' + (p.tx_ref ?? 'unknown');
+      const arr = map.get(hash) ?? [];
+      arr.push(p);
+      map.set(hash, arr);
+    });
+    return map;
+  };
+
+  const snapshotTotal = (snapshot: any[]) => {
+    if (!Array.isArray(snapshot)) return 0;
+    return snapshot.reduce((s: number, it: any) => s + (Number(it.price ?? 0) * Number(it.quantity ?? 0)), 0);
+  };
+
+  // Only pending payments count as a reservation; use composite keys for safety
+  const computeCoveredForSnapshot = (snapshot: any[], paymentsForCart: any[]) => {
+    if (!Array.isArray(snapshot) || snapshot.length === 0) return 0;
+    const reservedByKey: Record<string, number> = {};
+    (paymentsForCart ?? []).forEach((p) => {
+      if ((p.status ?? '').toString() !== 'pending') return; // only pending
+      const snap = Array.isArray(p.meta?.cart_snapshot) ? p.meta.cart_snapshot : [];
+      snap.forEach((si: any) => {
+        const key = keyForSnapshotItem(si);
+        if (!key) return;
+        const qty = Number(si.quantity ?? si.qty ?? 0);
+        if (!qty || qty <= 0) return;
+        reservedByKey[key] = (reservedByKey[key] ?? 0) + qty;
       });
-      setOtherPendingPayments(others);
-    } catch (e) {
-      setOtherPendingPayments([]);
-    } finally {
-      setLoadingOtherPayments(false);
-    }
+    });
+
+    const covered = snapshot.reduce((acc: number, it: any) => {
+      const key = keyForSnapshotItem(it);
+      if (!key) return acc;
+      const qty = Number(it.quantity ?? 0);
+      const price = Number(it.price ?? 0);
+      const r = reservedByKey[key] ?? 0;
+      const applicable = Math.min(qty, r);
+      return acc + applicable * price;
+    }, 0);
+
+    return covered;
   };
 
   // Load locations and (optionally) user to set default selected location
@@ -500,6 +572,12 @@ export default function CheckoutPage() {
 
         if (status === 'success') {
           setPaymentStatus('success');
+
+          // refresh payments/reservations so UI recalculates remainingToPay
+          await fetchUserPayments(cartHash);
+          await fetchAllNonOrderedPayments();
+          await loadAllPendingPayments(cartHash);
+
           // If server attached order_id inside payment.meta, show it
           const meta = payment?.meta ?? null;
           const orderId =
@@ -508,11 +586,11 @@ export default function CheckoutPage() {
 
           if (orderId) {
             setModal({ show: true, title: 'Payment confirmed', body: `Payment confirmed and order created: ${orderId}` });
-            // refresh payments and cart (use cartHash + filters)
-            await fetchPayments(cartHash, { excludeOrdered: true, onlyPending: true });
-            await fetchOtherPendingPayments(cartHash);
-            await loadCart();
+            // refresh cart & payments (use cartHash + filters)
+            await fetchUserPayments(cartHash);
+            await fetchAllNonOrderedPayments();
             await loadAllPendingPayments(cartHash);
+            await loadCart();
             // stop polling
             if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
             return;
@@ -523,6 +601,12 @@ export default function CheckoutPage() {
           if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
         } else if (status === 'failed') {
           setPaymentStatus('failed');
+
+          // refresh so failed payment no longer contributes to reservedByProduct
+          await fetchUserPayments(cartHash);
+          await fetchAllNonOrderedPayments();
+          await loadAllPendingPayments(cartHash);
+
           if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
           setModal({ show: true, title: 'Payment failed', body: 'Payment failed or was cancelled.' });
         } else {
@@ -540,7 +624,13 @@ export default function CheckoutPage() {
     }, intervalMs);
   };
 
-  // Open payment options modal
+  // Shared function to open PaymentModal for a specific cart snapshot
+  const openPaymentModalForCart = (targetCartHash: string | null, amount: number) => {
+    setPaymentModalContext({ cart_hash: targetCartHash, amount });
+    setShowPaymentModal(true);
+  };
+
+  // Open payment options modal (main checkout button) — opens modal for the current cart snapshot
   const onOpenPaymentOptions = () => {
     if (!cartItems.length) {
       setModal({ show: true, title: 'Cart empty', body: 'Your cart is empty.' });
@@ -555,16 +645,30 @@ export default function CheckoutPage() {
       return;
     }
 
-    setShowPaymentModal(true);
+    // compute current remaining for current snapshot
+    const currentSnapshot = (cartItems || []).map((ci: any) => ({
+      product_id: Number(ci.product?.id ?? ci.product_id ?? 0),
+      name: ci.product?.name ?? ci.name ?? '',
+      price: Number(ci.product?.price ?? 0),
+      quantity: Number(ci.quantity ?? 0),
+    }));
+    const currentTotal = snapshotTotal(currentSnapshot);
+    const currentPayments = allNonOrderedPayments.filter((p) => (p.meta?.cart_hash ?? null) === (cartHash ?? null));
+    const currentCovered = computeCoveredForSnapshot(currentSnapshot, currentPayments);
+    const currentRemaining = Math.max(0, currentTotal - currentCovered);
+
+    openPaymentModalForCart(cartHash, currentRemaining <= 0 ? currentTotal : currentRemaining);
   };
 
-  // On PayChangu initiation (now includes cart_hash) — use remainingToPay if caller didn't pass amount
-  const handleInitiatePayChangu = async (payload: { amount?: number; mobile: string; network: string; delivery_lat?: number; delivery_lng?: number; delivery_address?: string }) => {
+  // On PayChangu initiation (now includes cart_hash) — use amount from payload or modal context
+  const handleInitiatePayChangu = async (payload: { amount?: number; mobile: string; network: string; delivery_lat?: number; delivery_lng?: number; delivery_address?: string; cart_hash?: string | null }) => {
     setPaymentLoading(true);
     try {
-      // prefer payload.amount, otherwise charge remainingToPay (fallback to total)
-      const amountToSend = typeof payload.amount === 'number' ? payload.amount : (remainingToPay ?? total);
-      const body = { ...payload, amount: amountToSend, cart_hash: cartHash, delivery_address: payload.delivery_address ?? address ?? '' };
+      // prefer payload.amount, otherwise prefer modal context amount, otherwise remainingToPay
+      const modalAmount = paymentModalContext?.amount;
+      const amountToSend = typeof payload.amount === 'number' ? payload.amount : (typeof modalAmount === 'number' ? modalAmount : (remainingToPay ?? total));
+      const targetCartHash = payload.cart_hash ?? paymentModalContext?.cart_hash ?? cartHash;
+      const body = { ...payload, amount: amountToSend, cart_hash: targetCartHash, delivery_address: payload.delivery_address ?? address ?? '' };
       const res = await client.post('/api/payment/initiate', body);
       const checkoutUrl = res.data?.checkout_url ?? res.data?.data?.checkout_url;
       const txRef = res.data?.tx_ref ?? res.data?.data?.tx_ref ?? res.data?.payment?.tx_ref ?? null;
@@ -580,14 +684,21 @@ export default function CheckoutPage() {
       startPollingPaymentStatus(txRef);
       setModal({ show: true, title: 'Payment started', body: 'PayChangu checkout started in a new tab. Complete payment there. This page will detect confirmation automatically.' });
       setShowPaymentModal(false);
+      setPaymentModalContext(null);
 
       // refresh payments but filtered to cartHash and also global pending list
-      await fetchPayments(cartHash, { excludeOrdered: true, onlyPending: true });
-      await fetchOtherPendingPayments(cartHash);
-      await loadAllPendingPayments(cartHash);
+      await fetchUserPayments(body.cart_hash ?? cartHash);
+      await fetchAllNonOrderedPayments();
+      await loadAllPendingPayments(body.cart_hash ?? cartHash);
 
       return { checkout_url: checkoutUrl, tx_ref: txRef };
     } catch (err: any) {
+      // refresh payments so UI shows accurate remaining after failure
+      try {
+        await fetchUserPayments(payload.cart_hash ?? cartHash);
+        await fetchAllNonOrderedPayments();
+        await loadAllPendingPayments(payload.cart_hash ?? cartHash);
+      } catch (_) {}
       setModal({ show: true, title: 'Payment failed', body: err?.response?.data?.error ?? err?.message ?? 'Failed to initiate PayChangu payment.' });
       throw err;
     } finally {
@@ -595,79 +706,88 @@ export default function CheckoutPage() {
     }
   };
 
- // src/app/(store)/checkout/page.tsx (replace existing handleUploadProof)
-const handleUploadProof = async (formData: FormData) => {
-  setPaymentLoading(true);
-  try {
-    if (cartHash) formData.append('cart_hash', cartHash);
-    if (address && address.trim().length > 0) formData.append('delivery_address', address.trim());
+  // handleUploadProof (updated)
+  const handleUploadProof = async (formData: FormData) => {
+    setPaymentLoading(true);
+    try {
+      // If modal context exists and caller didn't set cart_hash, append it
+      if (!formData.get('cart_hash') && paymentModalContext?.cart_hash) formData.append('cart_hash', String(paymentModalContext.cart_hash));
+      if (!formData.get('delivery_address') && address && address.trim().length > 0) formData.append('delivery_address', address.trim());
 
-    // IMPORTANT: ensure axios does NOT force a Content-Type (so browser can add boundary)
-    // Passing Content-Type: undefined will override default application/json if it's set globally.
-    const res = await client.post('/api/payment/upload-proof', formData, {
-      // Do not set multipart Content-Type here. Setting to undefined instructs axios
-      // to let the browser set the header with the boundary.
-      headers: { 'Content-Type': undefined as unknown as string },
-    });
+      // IMPORTANT: ensure axios does NOT force a Content-Type (so browser can add boundary)
+      // Passing Content-Type: undefined will override default application/json if it's set globally.
+      const res = await client.post('/api/payment/upload-proof', formData, {
+        // Do not set multipart Content-Type here. Setting to undefined instructs axios
+        // to let the browser set the header with the boundary.
+        headers: { 'Content-Type': undefined as unknown as string },
+      });
 
-    const txRef = res.data?.tx_ref ?? res.data?.data?.tx_ref ?? res.data?.payment?.tx_ref ?? null;
-    if (!txRef) throw new Error('Upload succeeded but no tx_ref returned. Contact support.');
+      const txRef = res.data?.tx_ref ?? res.data?.data?.tx_ref ?? res.data?.payment?.tx_ref ?? null;
+      if (!txRef) throw new Error('Upload succeeded but no tx_ref returned. Contact support.');
 
-    setPaymentTxRef(txRef);
-    setPaymentStatus('pending');
-    startPollingPaymentStatus(txRef);
+      setPaymentTxRef(txRef);
+      setPaymentStatus('pending');
+      startPollingPaymentStatus(txRef);
 
-    setModal({ show: true, title: 'Proof uploaded', body: 'Your proof of payment was uploaded. Payment is pending admin approval.' });
-    setShowPaymentModal(false);
+      setModal({ show: true, title: 'Proof uploaded', body: 'Your proof of payment was uploaded. Payment is pending admin approval.' });
+      setShowPaymentModal(false);
+      setPaymentModalContext(null);
 
-    await fetchPayments(cartHash, { excludeOrdered: true, onlyPending: true });
-    await fetchOtherPendingPayments(cartHash);
-    await loadAllPendingPayments(cartHash);
+      await fetchUserPayments(cartHash);
+      await fetchAllNonOrderedPayments();
+      await loadAllPendingPayments(cartHash);
 
-    return { tx_ref: txRef };
-  } catch (err: any) {
-    // Improved logging for debugging
-    console.error('upload-proof error (full err):', err);
-    console.error('upload-proof error (response):', err?.response);
-    console.error('upload-proof error (response.data):', err?.response?.data);
+      return { tx_ref: txRef };
+    } catch (err: any) {
+      // Improved logging for debugging
+      console.error('upload-proof error (full err):', err);
+      console.error('upload-proof error (response):', err?.response);
+      console.error('upload-proof error (response.data):', err?.response?.data);
 
-    // Extract server validation messages (Laravel-style: response.data.errors or response.data.message)
-    const respData = err?.response?.data ?? null;
-    let userMessage = err?.message ?? 'Failed to upload proof.';
+      // Extract server validation messages (Laravel-style: response.data.errors or response.data.message)
+      const respData = err?.response?.data ?? null;
+      let userMessage = err?.message ?? 'Failed to upload proof.';
 
-    if (respData) {
-      // If Laravel returns validation errors object: { errors: { file: ["The file field is required."] } }
-      if (respData.errors && typeof respData.errors === 'object') {
-        const flat: string[] = [];
-        Object.keys(respData.errors).forEach((k) => {
-          const val = respData.errors[k];
-          if (Array.isArray(val)) flat.push(...val);
-          else if (typeof val === 'string') flat.push(val);
-        });
-        if (flat.length > 0) userMessage = flat.join(' — ');
-      } else if (respData.message && typeof respData.message === 'string') {
-        userMessage = respData.message;
-      } else {
-        // fallback: show JSON string of respData (short)
-        try {
-          userMessage = JSON.stringify(respData).slice(0, 400);
-        } catch {
-          userMessage = String(respData);
+      if (respData) {
+        // If Laravel returns validation errors object: { errors: { file: ["The file field is required."] } }
+        if (respData.errors && typeof respData.errors === 'object') {
+          const flat: string[] = [];
+          Object.keys(respData.errors).forEach((k) => {
+            const val = respData.errors[k];
+            if (Array.isArray(val)) flat.push(...val);
+            else if (typeof val === 'string') flat.push(val);
+          });
+          if (flat.length > 0) userMessage = flat.join(' — ');
+        } else if (respData.message && typeof respData.message === 'string') {
+          userMessage = respData.message;
+        } else {
+          // fallback: show JSON string of respData (short)
+          try {
+            userMessage = JSON.stringify(respData).slice(0, 400);
+          } catch {
+            userMessage = String(respData);
+          }
         }
       }
+
+      setModal({
+        show: true,
+        title: 'Upload failed',
+        body: userMessage,
+      });
+
+      // ensure reservations are recalculated (in case server changed)
+      try {
+        await fetchUserPayments(cartHash);
+        await fetchAllNonOrderedPayments();
+        await loadAllPendingPayments(cartHash);
+      } catch (_) {}
+
+      throw err;
+    } finally {
+      setPaymentLoading(false);
     }
-
-    setModal({
-      show: true,
-      title: 'Upload failed',
-      body: userMessage,
-    });
-
-    throw err;
-  } finally {
-    setPaymentLoading(false);
-  }
-};
+  };
 
   // Place Order (client triggered; server may auto-place when admin approves)
   const placeOrder = async () => {
@@ -717,8 +837,8 @@ const handleUploadProof = async (formData: FormData) => {
         // refresh cart & payments
         const computed = await loadCart();
         const itemsSnapshot = computed?.items ?? [];
-        await fetchPayments(null, { excludeOrdered: true, onlyPending: true });
-        await fetchOtherPendingPayments(null);
+        await fetchUserPayments(null);
+        await fetchAllNonOrderedPayments();
         await loadAllPendingPayments(null, itemsSnapshot);
       } else {
         setModal({ show: true, title: 'Order failed', body: res.data?.message ?? 'Failed to place order' });
@@ -758,239 +878,305 @@ const handleUploadProof = async (formData: FormData) => {
   // small UI helper: truncated time
   const niceDate = (d?: string) => (d ? new Date(d).toLocaleString() : '—');
 
+  // Derived banners & coverage calculation
+  const pendingPayments = allNonOrderedPayments.filter((p) => (p.status ?? '') === 'pending');
+  const pendingForCurrent = pendingPayments.find((p) => (p.meta?.cart_hash ?? null) === (cartHash ?? null)) ?? null;
+  const failedForCurrent = allNonOrderedPayments.find((p) => (p.status ?? '') === 'failed' && (p.meta?.cart_hash ?? null) === (cartHash ?? null)) ?? null;
+  const pendingForOthers = pendingPayments.filter((p) => (p.meta?.cart_hash ?? null) !== (cartHash ?? null));
+
+  // Compute covered amount display more simply if userPayments include pending entries for current cart
+  const computeCoveredFromUserPayments = () => {
+    try {
+      if (!Array.isArray(userPayments)) return 0;
+      let covered = 0;
+      userPayments.forEach((p) => {
+        if ((p.meta?.cart_hash ?? null) !== (cartHash ?? null)) return;
+        if ((p.status ?? '') !== 'success' && (p.status ?? '') !== 'pending') return;
+        if (!Array.isArray(p.meta?.cart_snapshot)) return;
+        p.meta.cart_snapshot.forEach((si: any) => {
+          const pid = Number(si.product_id ?? si.productId ?? 0);
+          const qty = Number(si.quantity ?? 0);
+          const price = Number(si.price ?? 0);
+          // match product in current cart items by id
+          const match = cartItems.find((it) => Number(it.product?.id ?? it.product_id ?? 0) === pid);
+          if (match) {
+            const applicable = Math.min(Number(match.quantity ?? 0), qty);
+            covered += applicable * price;
+          }
+        });
+      });
+      return covered;
+    } catch {
+      return 0;
+    }
+  };
+
+  const coveredFromUserPayments = computeCoveredFromUserPayments();
+  const remaining = Math.max(0, total - coveredFromUserPayments);
+
+  // UI render
   return (
     <div className="container py-5">
       <CenteredModal show={modal.show} title={modal.title} body={modal.body} onClose={handleCloseModal} />
 
       <PaymentModal
         show={showPaymentModal}
-        amount={remainingToPay} // <-- prefill with remaining to pay
+        amount={paymentModalContext?.amount ?? remainingToPay} // <-- prefill with remaining to pay (for current cart)
         defaultMobile={''}
         defaultNetwork={'mpamba'}
         defaultAddress={address}
         defaultLat={gps.lat}
         defaultLng={gps.lng}
-        onClose={() => setShowPaymentModal(false)}
-        onInitiatePayChangu={handleInitiatePayChangu}
-        onUploadProof={handleUploadProof}
+        onClose={() => { setShowPaymentModal(false); setPaymentModalContext(null); }}
+        onInitiatePayChangu={async (payload) => {
+          // ensure the cart_hash is passed from modal context if caller doesn't
+          const body = { ...payload, cart_hash: payload.cart_hash ?? paymentModalContext?.cart_hash ?? cartHash };
+          return handleInitiatePayChangu(body);
+        }}
+        onUploadProof={async (formData) => {
+          // ensure modal's cart_hash is applied if present
+          if (!formData.get('cart_hash') && paymentModalContext?.cart_hash) formData.append('cart_hash', String(paymentModalContext.cart_hash));
+          return handleUploadProof(formData);
+        }}
       />
 
       <div className="bg-white rounded shadow-sm p-4">
         <h4 className="mb-4">Checkout</h4>
 
-        {cartItems.length === 0 ? (
-          <div className="text-center text-muted py-5">
-            <h5>Your cart is empty</h5>
+        {/* Show spinner while initial data is loading */}
+        {initialLoading ? (
+          <div className="text-center py-5">
+            <LoadingSpinner />
           </div>
         ) : (
           <>
-            <CartTable items={cartItems} total={total} />
-
-            {showVerificationBlock ? (
-              <div className="border rounded p-3 mb-3">
-                <h6>Delivery Location Verification</h6>
-
-                <div className="mb-3">
-                  <label className="form-label small">Delivery address (hostel/office/room)</label>
-                  <input
-                    type="text"
-                    className="form-control"
-                    placeholder="e.g. Hostel A, Room 12"
-                    value={address}
-                    onChange={(e) => setAddress(e.target.value)}
-                  />
-                </div>
-
-                <div className="mb-3">
-                  <label className="form-label small">Select location</label>
-                  <select
-                    className="form-select"
-                    value={selectedLocationId}
-                    onChange={(e) => setSelectedLocationId(e.target.value ? Number(e.target.value) : '')}
-                    disabled={verified}
-                  >
-                    <option value="">Choose location</option>
-                    {locations.map((l) => (
-                      <option key={l.id} value={l.id}>
-                        {l.name}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="form-text small mt-1">
-                    If GPS fails we will automatically use this selected location as fallback.
+            {cartItems.length === 0 ? (
+              <div className="text-center text-muted py-5">
+                <h5>Your cart is empty</h5>
+              </div>
+            ) : (
+              <>
+                {/* Pending banners (MVP) */}
+                {pendingForCurrent && (
+                  <div className="alert alert-warning">
+                    <strong>Pending payment for this cart:</strong> {pendingForCurrent.meta?.cart_hash ?? pendingForCurrent.tx_ref}
+                    <div className="small mt-1">Awaiting admin approval. You cannot start another payment for this cart while it's pending.</div>
                   </div>
+                )}
+
+                {failedForCurrent && !pendingForCurrent && (
+                  <div className="alert alert-danger">
+                    <strong>Previous payment failed for this cart:</strong> {failedForCurrent.tx_ref}
+                    <div className="small mt-1">You may try again by using the Make Payment button below.</div>
+                  </div>
+                )}
+
+                {pendingForOthers.length > 0 && (
+                  <div className="alert alert-info">
+                    <strong>Note:</strong> You have {pendingForOthers.length} pending payment(s) for previous cart(s). These apply to earlier carts and will be handled separately by admin.
+                  </div>
+                )}
+
+                {/* Simple cart table (single-cart UI) */}
+                <div className="table-responsive mb-3">
+                  <table className="table align-middle">
+                    <thead>
+                      <tr>
+                        <th style={{ minWidth: 220 }}>Product</th>
+                        <th>Price</th>
+                        <th>Qty</th>
+                        <th>Subtotal</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cartItems.map((i) => {
+                        const price = Number(i.product?.price ?? i.price ?? 0);
+                        const qty = Number(i.quantity ?? i.qty ?? 0);
+                        return (
+                          <tr key={i.id ?? `${i.product?.id}-${Math.random()}`}>
+                            <td>
+                              <div className="d-flex align-items-center gap-3">
+                                <img
+                                  src={
+                                    i.product?.image_url_full ??
+                                    (i.product?.image_url ? `/storage/${String(i.product.image_url).replace(/^\/+/, '')}` : '/images/placeholder.png')
+                                  }
+                                  alt={i.product?.name ?? i.name ?? 'product'}
+                                  style={{ width: 72, height: 56, objectFit: 'cover', borderRadius: 6 }}
+                                />
+                                <div>
+                                  <div className="fw-semibold">{i.product?.name ?? i.name ?? '—'}</div>
+                                  <div className="text-muted small">{i.product?.description ?? ''}</div>
+                                </div>
+                              </div>
+                            </td>
+                            <td>MK {price.toFixed(2)}</td>
+                            <td>{qty}</td>
+                            <td>MK {(price * qty).toFixed(2)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
 
-                <div className="d-flex gap-2 align-items-center">
-                  <button className="btn btn-outline-primary" onClick={requestGps} disabled={verifying}>
-                    {verifying ? 'Verifying...' : verified ? 'Location Verified ✓' : 'Verify via GPS'}
-                  </button>
+                {/* DELIVERY LOCATION VERIFICATION UI - restored */}
+                <div className="border rounded p-3 mb-3">
+                  <h6>Delivery Location Verification</h6>
 
-                  <div className="small text-muted ms-3">
-                    {gps.lat && gps.lng ? (
-                      <>
-                        Lat: <strong>{gps.lat.toFixed(6)}</strong>, Lng: <strong>{gps.lng.toFixed(6)}</strong>
-                      </>
-                    ) : (
-                      <>No coordinates yet</>
+                  <div className="mb-3">
+                    <label className="form-label small">Delivery address (hostel/office/room)</label>
+                    <input
+                      type="text"
+                      className="form-control"
+                      placeholder="e.g. Hostel A, Room 12"
+                      value={address}
+                      onChange={(e) => setAddress(e.target.value)}
+                      disabled={verified}
+                    />
+                  </div>
+
+                  <div className="mb-3">
+                    <label className="form-label small">Select location</label>
+                    <select
+                      className="form-select"
+                      value={selectedLocationId}
+                      onChange={(e) => setSelectedLocationId(e.target.value ? Number(e.target.value) : '')}
+                      disabled={verified}
+                    >
+                      <option value="">Choose location</option>
+                      {locations.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.name}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="form-text small mt-1">
+                      If GPS fails we will automatically use this selected location as fallback.
+                    </div>
+                  </div>
+
+                  <div className="d-flex gap-2 align-items-center">
+                    <button className="btn btn-outline-primary" onClick={requestGps} disabled={verifying || verified}>
+                      {verifying ? 'Verifying...' : verified ? 'Location Verified ✓' : 'Verify via GPS'}
+                    </button>
+
+                    <div className="small text-muted ms-3">
+                      {gps.lat && gps.lng ? (
+                        <>
+                          Lat: <strong>{gps.lat.toFixed(6)}</strong>, Lng: <strong>{gps.lng.toFixed(6)}</strong>
+                        </>
+                      ) : (
+                        <>No coordinates yet</>
+                      )}
+                    </div>
+
+                    {showFallbackChoice && (
+                      <button
+                        className="btn btn-outline-secondary ms-3"
+                        onClick={() => useSelectedLocationFallback(false)}
+                        disabled={!selectedLocationId || verifying}
+                      >
+                        Use selected location as fallback
+                      </button>
+                    )}
+
+                    {paymentTxRef && (
+                      <div className="ms-3 small">
+                        Payment: <strong>{paymentStatus}</strong> {paymentTxRef ? `(tx: ${paymentTxRef})` : null}
+                      </div>
                     )}
                   </div>
 
-                  {showFallbackChoice && (
-                    <button
-                      className="btn btn-outline-secondary ms-3"
-                      onClick={() => useSelectedLocationFallback(false)}
-                      disabled={!selectedLocationId || verifying}
-                    >
-                      Use selected location as fallback
-                    </button>
-                  )}
-
-                  {paymentTxRef && (
-                    <div className="ms-3 small">
-                      Payment: <strong>{paymentStatus}</strong> {paymentTxRef ? `(tx: ${paymentTxRef})` : null}
-                    </div>
-                  )}
-                </div>
-
-                <div className="mt-2">
-                  {detectedArea ? (
-                    <div className="alert alert-success mb-0 p-2">Detected area: <strong>{detectedArea.name}</strong></div>
-                  ) : (
-                    !verifying && gps.lat && gps.lng && !verified && (
-                      <div className="alert alert-warning mb-0 p-2">Coordinates are outside delivery zones.</div>
-                    )
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="border rounded p-3 mb-3">
-                <h6>Delivery confirmed</h6>
-                <div className="small text-muted mb-2">
-                  Delivery location verified {detectedArea?.name ? `— ${detectedArea.name}` : ''}.
-                </div>
-                <div className="small">Address: <strong>{address || '—'}</strong></div>
-                <div className="small">Coordinates: {gps.lat && gps.lng ? <strong>{gps.lat.toFixed(6)}, {gps.lng.toFixed(6)}</strong> : '—'}</div>
-                <div className="mt-3">
-                  <strong>Payments for this order</strong>
-                  {/* userPayments list below already reflects filtered payments */}
-                </div>
-              </div>
-            )}
-
-            {/* Uploaded proofs list */}
-            <div className="mb-3">
-              <h6>Your payment uploads</h6>
-              {loadingPayments ? (
-                <div className="text-center py-3"><LoadingSpinner /></div>
-              ) : userPayments.length === 0 ? (
-                <div className="text-muted small">No payment uploads yet for this cart.</div>
-              ) : (
-                <div className="list-group">
-                  {userPayments.map((p) => (
-                    <div key={p.id ?? p.tx_ref} className="list-group-item d-flex align-items-center gap-3">
-                      <a href={proofHref(p) ?? '#'} target="_blank" rel="noreferrer noopener">
-                        <img
-                          src={proofSrc(p)}
-                          alt={`proof ${p.tx_ref ?? ''}`}
-                          style={{ width: 92, height: 64, objectFit: 'cover', borderRadius: 6 }}
-                        />
-                      </a>
-                      <div className="flex-fill">
-                        <div className="d-flex justify-content-between">
-                          <div>
-                            <div className="fw-semibold">{p.tx_ref}</div>
-                            <div className="small text-muted">{niceDate(p.created_at)}</div>
-                          </div>
-                          <div className="text-end">
-                            <div className={`badge ${p.status === 'success' ? 'bg-success' : p.status === 'failed' ? 'bg-danger' : 'bg-warning text-dark'}`}>
-                              {p.status}
-                            </div>
-                            {p.meta?.order_id && <div className="small mt-1">Order: <strong>{p.meta.order_id}</strong></div>}
-                          </div>
-                        </div>
-                        <div className="small text-muted mt-2">{p.meta?.note ?? ''}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Other pending payments (different cart snapshot) */}
-            {loadingOtherPayments ? (
-              <div className="mb-3 text-center"><LoadingSpinner /></div>
-            ) : otherPendingPayments.length > 0 ? (
-              <div className="mb-3">
-                <div className="alert alert-warning">
-                  <strong>Note:</strong> You have other pending payment(s) that were made for a different cart snapshot. These payments apply to a previous cart and will be handled separately by admin.
                   <div className="mt-2">
-                    <button className="btn btn-sm btn-outline-secondary me-2" onClick={() => setShowOtherPayments(!showOtherPayments)}>
-                      {showOtherPayments ? 'Hide' : 'Show'} other pending payments ({otherPendingPayments.length})
-                    </button>
-                    <button className="btn btn-sm btn-outline-dark" onClick={async () => { await fetchOtherPendingPayments(cartHash); await fetchPayments(cartHash); await loadAllPendingPayments(cartHash); }}>
-                      Refresh
-                    </button>
+                    {detectedArea ? (
+                      <div className="alert alert-success mb-0 p-2">Detected area: <strong>{detectedArea.name}</strong></div>
+                    ) : (
+                      !verifying && gps.lat && gps.lng && !verified && (
+                        <div className="alert alert-warning mb-0 p-2">Coordinates are outside delivery zones.</div>
+                      )
+                    )}
                   </div>
                 </div>
+                {/* END verification block */}
 
-                {showOtherPayments && (
-                  <div className="list-group">
-                    {otherPendingPayments.map((p) => (
-                      <div key={p.id ?? p.tx_ref} className="list-group-item d-flex align-items-center gap-3">
-                        <a href={proofHref(p) ?? '#'} target="_blank" rel="noreferrer noopener">
-                          <img
-                            src={proofSrc(p)}
-                            alt={`proof ${p.tx_ref ?? ''}`}
-                            style={{ width: 92, height: 64, objectFit: 'cover', borderRadius: 6 }}
-                          />
-                        </a>
-                        <div className="flex-fill">
-                          <div className="d-flex justify-content-between">
-                            <div>
-                              <div className="fw-semibold">{p.tx_ref}</div>
-                              <div className="small text-muted">{niceDate(p.created_at)}</div>
-                              <div className="small text-muted">Paid amount: MK {(Number(p.amount) || 0).toFixed(2)}</div>
-                              <div className="small text-muted">Cart snapshot: <code className="text-break">{p.meta?.cart_hash ?? '—'}</code></div>
-                            </div>
-                            <div className="text-end">
-                              <div className={`badge ${p.status === 'success' ? 'bg-success' : p.status === 'failed' ? 'bg-danger' : 'bg-warning text-dark'}`}>
-                                {p.status}
+                {/* Summary row */}
+                <div className="mb-3">
+                  <div className="small text-muted">Cart total: MK {total.toFixed(2)}</div>
+                  <div className="small text-success">Already reserved/covered (this cart): MK {coveredFromUserPayments.toFixed(2)}</div>
+                  <div className="h5">Remaining to pay: {remaining <= 0 ? <span className="text-success">None</span> : `MK ${remaining.toFixed(2)}`}</div>
+                </div>
+
+                {/* User uploaded proofs for this cart */}
+                <div className="mb-3">
+                  <h6>Your payment uploads for this cart</h6>
+
+                  {loadingPayments ? (
+                    <div className="text-center py-3"><LoadingSpinner /></div>
+                  ) : userPayments.length === 0 ? (
+                    <div className="text-muted small">No payment uploads yet for this cart.</div>
+                  ) : (
+                    <div className="list-group">
+                      {userPayments.map((p) => (
+                        <div key={p.id ?? p.tx_ref} className="list-group-item d-flex align-items-center gap-3">
+                          <a href={proofHref(p) ?? '#'} target="_blank" rel="noreferrer noopener">
+                            <img
+                              src={proofSrc(p)}
+                              alt={`proof ${p.tx_ref ?? ''}`}
+                              style={{ width: 92, height: 64, objectFit: 'cover', borderRadius: 6 }}
+                            />
+                          </a>
+                          <div className="flex-fill">
+                            <div className="d-flex justify-content-between">
+                              <div>
+                                <div className="fw-semibold">{p.tx_ref}</div>
+                                <div className="small text-muted">{niceDate(p.created_at)}</div>
                               </div>
-                              {p.meta?.order_id && <div className="small mt-1">Order: <strong>{p.meta.order_id}</strong></div>}
+                              <div className="text-end">
+                                <div className={`badge ${p.status === 'success' ? 'bg-success' : p.status === 'failed' ? 'bg-danger' : 'bg-warning text-dark'}`}>
+                                  {p.status}
+                                </div>
+                                {p.meta?.order_id && <div className="small mt-1">Order: <strong>{p.meta.order_id}</strong></div>}
+                              </div>
                             </div>
+                            <div className="small text-muted mt-2">{p.meta?.note ?? ''}</div>
+
+                            {/* optional items snapshot display */}
+                            {Array.isArray(p.meta?.cart_snapshot) && (
+                              <div className="small text-muted mt-2">
+                                <div>Items snapshot:</div>
+                                <ul className="mb-0">
+                                  {p.meta.cart_snapshot.map((s: any, idx: number) => (
+                                    <li key={idx}>{s.name ?? `#${s.product_id}`} — {s.quantity} × MK {Number(s.price ?? 0).toFixed(2)}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
                           </div>
-                          <div className="small text-muted mt-2">{p.meta?.note ?? ''}</div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : null}
+                      ))}
+                    </div>
+                  )}
+                </div>
 
-            {/* Summary: cart total, covered amount and remaining */}
-            <div className="mb-3">
-              <div className="small text-muted">Cart total: MK {total.toFixed(2)}</div>
-              <div className="small text-success">Already reserved/covered: MK {coveredAmount.toFixed(2)}</div>
-              <div className="h5">Remaining to pay: {remainingToPay <= 0 ? <span className="text-success">None</span> : `MK ${remainingToPay.toFixed(2)}`}</div>
-            </div>
+                {error && <div className="alert alert-danger">{error}</div>}
 
-            {error && <div className="alert alert-danger">{error}</div>}
+                {/* bottom: main payment/place-order buttons (same behaviour as before) */}
+                <div className="d-flex justify-content-end gap-3">
+                  <button
+                    className="btn btn-primary"
+                    onClick={onOpenPaymentOptions}
+                    disabled={!!pendingForCurrent || paymentLoading || !verified || (address.trim().length < 3)}
+                  >
+                    {paymentLoading ? <LoadingSpinner /> : (pendingForCurrent ? 'Payment pending — awaiting approval' : (paymentStatus === 'pending' ? 'Payment pending...' : 'Make Payment'))}
+                  </button>
 
-            <div className="d-flex justify-content-end gap-3">
-              <button
-                className="btn btn-primary"
-                onClick={onOpenPaymentOptions}
-                disabled={!verified || address.trim().length < 3 || paymentLoading}
-              >
-                {paymentLoading ? <LoadingSpinner /> : (paymentStatus === 'pending' ? 'Payment pending...' : 'Make Payment')}
-              </button>
-
-              <button className="btn btn-success btn-lg" onClick={placeOrder} disabled={placeOrderDisabled}>
-                Place Order
-              </button>
-            </div>
+                  <button className="btn btn-success btn-lg" onClick={placeOrder} disabled={placeOrderDisabled}>
+                    Place Order
+                  </button>
+                </div>
+              </>
+            )}
           </>
         )}
       </div>

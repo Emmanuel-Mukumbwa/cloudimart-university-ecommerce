@@ -1,3 +1,75 @@
+# Cloudimart Frontend (Next.js)
+
+This folder contains the Next.js frontend for the Cloudimart prototype. It provides product listing, category browse, cart, and checkout pages, and integrates with the Laravel backend for order creation and delivery confirmation.
+
+## Prerequisites
+
+- Node.js (16+ recommended) and npm (or yarn)
+
+## Setup (Windows PowerShell)
+
+1. From project frontend folder run:
+
+```powershell
+cd c:\Users\aRelic\Downloads\relic\cloudimart-project\cloudimart-frontend
+npm install
+```
+
+2. Create `.env.local` with any configuration needed. At minimum you will want to set the backend API URL:
+
+```text
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+# other variables as needed
+```
+
+3. Run the development server:
+
+```powershell
+npm run dev
+```
+
+The frontend will run on http://localhost:3000 by default.
+
+## Key locations in the codebase
+
+- `src/app/(store)/checkout/page.tsx` — Checkout page that performs location validation and finalizes orders (this is the active checkout used by the prototype).
+- `src/app/components/` — UI components used to build product lists, cart, and checkout.
+- `src/lib/` or `src/utils/` — API wrappers, helpers and client-side validation utilities.
+
+## How the checkout location restriction works (frontend side)
+
+- The checkout page validates the user's chosen delivery location against the list of supported locations before allowing submission. This provides immediate feedback.
+- The backend performs authoritative validation when the order request reaches the server; the frontend validation helps the user earlier in the flow.
+
+## Testing the prototype
+
+1. Start the backend (see backend README).
+2. Start the frontend with `npm run dev`.
+3. Open the app, browse categories (Stationery, Dairy), add items to cart.
+4. Proceed to checkout. When prompted for a delivery location, try both allowed locations (e.g., `Mzuzu University`) and a disallowed location to confirm the restriction.
+
+## Notes on integration
+
+- The frontend expects REST endpoints for product listing, cart, and checkout under the backend API base URL (see `NEXT_PUBLIC_API_URL`). If API paths differ, update the frontend API wrappers accordingly.
+- Order confirmation and notifications are performed by the backend. The frontend displays the returned Order ID and stores it in the user session when available.
+
+## Next steps / improvements
+
+- Add E2E tests (Cypress or Playwright) to cover the full checkout and delivery confirmation flow.
+- Improve UX for delivery personnel (mobile-friendly delivery confirmation form).
+
+## Useful commands
+
+```powershell
+# Install
+npm install
+
+# Run dev
+npm run dev
+
+# Build for production
+npm run build; npm run start
+```
 # Cloudimart Frontend — local dev notes
 
 This folder contains the Next.js frontend for Cloudimart. Below are minimal steps to run it locally and the recommended way to configure the API URL.
