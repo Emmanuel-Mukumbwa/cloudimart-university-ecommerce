@@ -1,3 +1,99 @@
+# Cloudimart Backend (Laravel)
+
+This folder contains the Laravel backend for the Cloudimart prototype. It exposes APIs for products, categories, cart and checkout, enforces location-based checkout restrictions, generates and stores Order IDs, and contains delivery confirmation endpoints.
+
+## Quick overview
+
+- Framework: Laravel (PHP)
+- Key responsibilities:
+  - Product and category APIs
+  - Cart/purchase endpoints
+  - Location validation for checkout
+  - Order ID generation and storage
+  - Delivery confirmation and transaction logging
+
+## Prerequisites
+
+- PHP 8.x (as required by composer.json)
+- Composer
+- MySQL or compatible database
+- Node (optional, only for frontend build tasks if run here)
+
+## Setup (Windows PowerShell)
+
+1. Install PHP and Composer if you haven't already.
+2. From this backend folder run:
+
+```powershell
+cd c:\Users\aRelic\Downloads\relic\cloudimart-project\cloudimart-backend
+composer install
+cp .env.example .env
+# edit .env to set DB credentials, MAIL and SMS provider configs
+php artisan key:generate
+php artisan migrate --seed
+php artisan storage:link
+php artisan serve --port=8000
+```
+
+The server will run by default at http://127.0.0.1:8000.
+
+## Important files and locations
+
+- `app/Models/` — Eloquent models (Product, Category, Order, OrderItem, Cart, CartItem, User)
+- `app/Services/LocationService.php` — location validation logic used during checkout
+- `app/Traits/GeneratesOrderId.php` — trait used to create unique Order IDs on order creation
+- `routes/api.php` — API routes (product listing, cart, checkout, orders)
+- `database/migrations/` — migration files to create database schema
+
+## Configured Local Delivery Locations
+
+The prototype restricts checkout to the Mzuzu University community. The default list of allowed locations (updateable in `LocationService.php` or via config) includes:
+
+- Mzuzu University
+- Mzuzu Central Hospital
+- Luwinga
+- Area 1B
+- KAKA
+- Nearby surrounding locations
+
+When a checkout request is received the backend validates the supplied delivery location against this list; if not present the order is rejected with a 403 and an explanatory message.
+
+## Order ID generation and notification
+
+- When an order is successfully placed and payment is confirmed (prototype: simulated), the system:
+  1. Generates a unique Order ID using `GeneratesOrderId` and stores it on the `orders` table.
+  2. Persists the order and its items.
+  3. Dispatches notification hooks for email and SMS. The prototype includes hooks; to enable them configure the `MAIL_*` and the SMS provider environment variables in `.env` and implement provider credentials.
+
+### Delivery confirmation flow (prototype)
+
+1. Delivery person receives the order and (on delivery) the customer shows the Order ID.
+2. Delivery person opens the delivery confirmation endpoint/form and submits:
+   - Order ID
+   - Phone number of the order collector
+3. Backend validates the Order ID and phone; marks order as delivered (status update) and logs the transaction as complete.
+4. Backend sends a delivery confirmation to the customer (email/SMS) and stores the delivery timestamp.
+
+## Running tests
+
+This prototype contains PHPUnit configuration (`phpunit.xml`). To run unit tests:
+
+```powershell
+php vendor\bin\phpunit
+```
+
+Note: tests are limited for prototype. Add integration tests for the checkout location validation and delivery confirmation flows as next steps.
+
+## Environment & production notes
+
+- Use queue workers to send emails/SMS in production (Laravel queue: redis or database driver).
+- Use a reliable SMS provider (e.g., Twilio) and a transactional email provider (Mailgun, SendGrid) for production notifications.
+- Protect endpoints with authentication (Sanctum is included in config) where necessary; delivery confirmation should require a delivery-person role in a real system.
+
+## Developer tips
+
+- If you change the allowed locations, update `app/Services/LocationService.php` and add migrations or seeders if you model locations in the DB.
+- OrderID generation is centralized in `app/Traits/GeneratesOrderId.php` — reuse this to keep IDs unique and consistent.
 <p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
 
 <p align="center">
