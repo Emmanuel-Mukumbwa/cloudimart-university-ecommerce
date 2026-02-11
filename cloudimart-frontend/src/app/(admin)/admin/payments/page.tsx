@@ -1,4 +1,4 @@
-// File: src/app/(admin)/admin/payments/page.tsx
+// //src/app/(admin)/admin/payments/page.tsx
 'use client';
 
 import React, { useEffect, useState } from 'react';
@@ -161,6 +161,16 @@ export default function AdminPaymentsPage() {
     return [];
   };
 
+  // Fixed: avoid mixing ?? with logical operators; explicit numeric conversion for price & qty
+  const snapshotTotal = (items: SnapshotItem[]) => {
+    if (!items || !Array.isArray(items)) return 0;
+    return items.reduce((s, it) => {
+      const price = Number(it.price ?? 0);
+      const qty = Number(it.quantity ?? it.qty ?? 0);
+      return s + price * qty;
+    }, 0);
+  };
+
   // Render small inline representation (first N) of items
   const inlineItems = (items: SnapshotItem[], limit = 2) => {
     if (!items || items.length === 0) return '—';
@@ -210,6 +220,7 @@ export default function AdminPaymentsPage() {
                 <th>Mobile</th>
                 <th>Products</th>
                 <th>Amount</th>
+                <th>Delivery</th>
                 <th>Status</th>
                 <th>Date</th>
                 <th>Action</th>
@@ -218,58 +229,88 @@ export default function AdminPaymentsPage() {
             <tbody>
               {payments.map(p => {
                 const items = snapshotItems(p);
+                const meta = parseMeta(p.meta);
+                const deliveryFee = meta?.delivery_fee ? Number(meta.delivery_fee) : 0;
+                const itemsTotal = snapshotTotal(items);
                 return (
-                  <tr key={p.id}>
-                    <td style={{ width: 120 }}>
-                      {p.proof_url ? (
-                        <a href={hrefFor(p) ?? '#'} target="_blank" rel="noreferrer">
-                          <img src={imgSrcFor(p)} alt="proof" style={{ height: 56, width: 96, objectFit: 'cover', borderRadius: 6 }} />
-                        </a>
-                      ) : (
-                        <div className="text-muted small">No proof</div>
-                      )}
-                    </td>
-                    <td style={{ minWidth: 160 }}>{p.tx_ref}</td>
-                    <td>{p.user?.name ?? `ID ${p.user_id ?? '—'}`}</td>
-                    <td>{p.mobile ?? '—'}</td>
+                  <React.Fragment key={p.id}>
+                    <tr>
+                      <td style={{ width: 120 }}>
+                        {p.proof_url ? (
+                          <a href={hrefFor(p) ?? '#'} target="_blank" rel="noreferrer">
+                            <img src={imgSrcFor(p)} alt="proof" style={{ height: 56, width: 96, objectFit: 'cover', borderRadius: 6 }} />
+                          </a>
+                        ) : (
+                          <div className="text-muted small">No proof</div>
+                        )}
+                      </td>
+                      <td style={{ minWidth: 160 }}>{p.tx_ref}</td>
+                      <td>{p.user?.name ?? `ID ${p.user_id ?? '—'}`}</td>
+                      <td>{p.mobile ?? '—'}</td>
 
-                    {/* Products column */}
-                    <td style={{ minWidth: 220 }}>
-                      {items.length > 0 ? (
-                        <div className="d-flex align-items-center">
-                          <div className="small text-truncate" style={{ maxWidth: 240 }}>{inlineItems(items)}</div>
-                          {items.length > 2 && <div className="ms-2 small text-muted">(+{items.length - 2})</div>}
-                          <button className="btn btn-sm btn-link ms-3 p-0" onClick={() => openCartModal(p)}>View</button>
-                        </div>
-                      ) : (
-                        <div className="small text-muted">
-                          {p.meta?.order_id ? <>Order: <strong>{p.meta.order_id}</strong></> : '—'}
-                        </div>
-                      )}
-                    </td>
+                      {/* Products column */}
+                      <td style={{ minWidth: 220 }}>
+                        {items.length > 0 ? (
+                          <div className="d-flex align-items-center">
+                            <div className="small text-truncate" style={{ maxWidth: 240 }}>{inlineItems(items)}</div>
+                            {items.length > 2 && <div className="ms-2 small text-muted">(+{items.length - 2})</div>}
+                            <button className="btn btn-sm btn-link ms-3 p-0" onClick={() => openCartModal(p)}>View</button>
+                          </div>
+                        ) : (
+                          <div className="small text-muted">
+                            {p.meta?.order_id ? <>Order: <strong>{p.meta.order_id}</strong></> : '—'}
+                          </div>
+                        )}
+                      </td>
 
-                    <td>MK {Number(p.amount).toFixed(2)}</td>
-                    <td>
-                      <span className={
-                        p.status === 'success' ? 'badge bg-success' :
-                        p.status === 'failed' ? 'badge bg-danger' :
-                        'badge bg-warning text-dark'
-                      }>{p.status}</span>
-                      {p.meta?.order_id && <div className="small mt-1">Order: <strong>{p.meta.order_id}</strong></div>}
-                    </td>
-                    <td>{p.created_at ? new Date(p.created_at).toLocaleString() : '—'}</td>
-                    <td style={{ minWidth: 180 }}>
-                      {p.status === 'pending' ? (
-                        <div className="d-flex gap-2">
-                          <button className="btn btn-sm btn-outline-primary" onClick={()=>openConfirm(p)}>Approve</button>
-                          <button className="btn btn-sm btn-outline-danger" onClick={()=>openReject(p)}>Reject</button>
-                          <button className="btn btn-sm btn-outline-secondary" onClick={load}>Refresh</button>
+                      <td>MK {Number(p.amount).toFixed(2)}</td>
+
+                      {/* DELIVERY fee column (new) */}
+                      <td>
+                        {deliveryFee > 0 ? <span>MK {deliveryFee.toFixed(2)}</span> : <span className="text-muted small">—</span>}
+                      </td>
+
+                      <td>
+                        <span className={
+                          p.status === 'success' ? 'badge bg-success' :
+                          p.status === 'failed' ? 'badge bg-danger' :
+                          'badge bg-warning text-dark'
+                        }>{p.status}</span>
+                        {p.meta?.order_id && <div className="small mt-1">Order: <strong>{p.meta.order_id}</strong></div>}
+                      </td>
+                      <td>{p.created_at ? new Date(p.created_at).toLocaleString() : '—'}</td>
+
+                      {/* kept placeholder in original Action cell; actual buttons are below in the action-row */}
+                      <td style={{ minWidth: 180 }}>
+                        <div className="text-muted small">Actions below</div>
+                      </td>
+                    </tr>
+
+                    {/* Action row: occupies full table width so buttons are always visible without horizontal scroll */}
+                    <tr key={`actions-${p.id}`}>
+                      <td colSpan={10} style={{ paddingTop: 6, paddingBottom: 12, background: 'transparent' }}>
+                        <div className="d-flex justify-content-between align-items-center">
+                          <div className="small text-muted">
+                            {/* optional short summary */}
+                            Snapshot total: <strong>MK {itemsTotal.toFixed(2)}</strong>
+                            {deliveryFee > 0 && <> · Delivery: <strong>MK {deliveryFee.toFixed(2)}</strong></>}
+                          </div>
+
+                          <div>
+                            {p.status === 'pending' ? (
+                              <div className="d-flex gap-2">
+                                <button className="btn btn-sm btn-outline-primary" onClick={() => openConfirm(p)}>{approving && selectedPayment?.id === p.id ? 'Approving...' : 'Approve'}</button>
+                                <button className="btn btn-sm btn-outline-danger" onClick={() => openReject(p)}>{rejecting && selectedPayment?.id === p.id ? 'Rejecting...' : 'Reject'}</button>
+                                <button className="btn btn-sm btn-outline-secondary" onClick={load}>Refresh</button>
+                              </div>
+                            ) : (
+                              <div className="text-muted small">No actions</div>
+                            )}
+                          </div>
                         </div>
-                      ) : (
-                        <div className="text-muted small">No actions</div>
-                      )}
-                    </td>
-                  </tr>
+                      </td>
+                    </tr>
+                  </React.Fragment>
                 );
               })}
             </tbody>
@@ -286,6 +327,24 @@ export default function AdminPaymentsPage() {
             <div>
               <p>Are you sure you want to mark this payment as <strong>success</strong> and attempt to auto-place the order for the user?</p>
               <p className="small text-muted">TX: {selectedPayment.tx_ref} — Amount: MK {Number(selectedPayment.amount).toFixed(2)}</p>
+
+              {/* Breakdown: items total, delivery fee, expected total */}
+              {(() => {
+                const meta = parseMeta(selectedPayment.meta);
+                const items = snapshotItems(selectedPayment);
+                const itemsTotal = snapshotTotal(items);
+                const deliveryFee = meta?.delivery_fee ? Number(meta.delivery_fee) : 0;
+                const expected = Number((itemsTotal + deliveryFee).toFixed(2));
+                return (
+                  <div className="mb-3">
+                    <div className="small text-muted">Snapshot items total: <strong>MK {itemsTotal.toFixed(2)}</strong></div>
+                    <div className="small text-muted">Delivery fee: <strong>{deliveryFee > 0 ? `MK ${deliveryFee.toFixed(2)}` : 'MK 0.00'}</strong></div>
+                    <div className="small text-muted">Expected total: <strong>MK {expected.toFixed(2)}</strong></div>
+                    <div className="small text-warning mt-2">Server will verify payment amount before creating order.</div>
+                  </div>
+                );
+              })()}
+
               {selectedPayment.proof_url && (
                 <div className="text-center mt-3">
                   <a href={selectedPayment.proof_url_full ?? `/storage/${selectedPayment.proof_url}`} target="_blank" rel="noreferrer">
