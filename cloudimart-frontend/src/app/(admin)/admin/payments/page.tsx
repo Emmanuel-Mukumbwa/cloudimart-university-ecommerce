@@ -210,7 +210,7 @@ export default function AdminPaymentsPage() {
       ) : payments.length === 0 ? (
         <div className="text-muted">No payments found.</div>
       ) : (
-        <div className="table-responsive">
+        <div className="table-responsive" style={{ position: 'relative' }}>
           <table className="table align-middle">
             <thead>
               <tr>
@@ -223,7 +223,15 @@ export default function AdminPaymentsPage() {
                 <th>Delivery</th>
                 <th>Status</th>
                 <th>Date</th>
-                <th>Action</th>
+                {/* Sticky action header */}
+                <th style={{
+                  position: 'sticky',
+                  right: 0,
+                  zIndex: 4,
+                  background: '#fff',
+                  boxShadow: '-6px 0 8px rgba(0,0,0,0.04)',
+                  minWidth: 220,
+                }}>Action</th>
               </tr>
             </thead>
             <tbody>
@@ -232,6 +240,7 @@ export default function AdminPaymentsPage() {
                 const meta = parseMeta(p.meta);
                 const deliveryFee = meta?.delivery_fee ? Number(meta.delivery_fee) : 0;
                 const itemsTotal = snapshotTotal(items);
+                const expectedTotal = Number((itemsTotal + deliveryFee).toFixed(2));
                 return (
                   <React.Fragment key={p.id}>
                     <tr>
@@ -280,29 +289,47 @@ export default function AdminPaymentsPage() {
                       </td>
                       <td>{p.created_at ? new Date(p.created_at).toLocaleString() : '—'}</td>
 
-                      {/* kept placeholder in original Action cell; actual buttons are below in the action-row */}
-                      <td style={{ minWidth: 180 }}>
-                        <div className="text-muted small">Actions below</div>
-                      </td>
-                    </tr>
-
-                    {/* Action row: occupies full table width so buttons are always visible without horizontal scroll */}
-                    <tr key={`actions-${p.id}`}>
-                      <td colSpan={10} style={{ paddingTop: 6, paddingBottom: 12, background: 'transparent' }}>
-                        <div className="d-flex justify-content-between align-items-center">
-                          <div className="small text-muted">
-                            {/* optional short summary */}
-                            Snapshot total: <strong>MK {itemsTotal.toFixed(2)}</strong>
-                            {deliveryFee > 0 && <> · Delivery: <strong>MK {deliveryFee.toFixed(2)}</strong></>}
+                      {/* Sticky action cell so buttons remain visible on horizontal scroll */}
+                      <td style={{
+                        minWidth: 220,
+                        position: 'sticky',
+                        right: 0,
+                        zIndex: 3,
+                        background: '#fff',
+                        verticalAlign: 'middle',
+                        paddingTop: 8,
+                        paddingBottom: 8,
+                      }}>
+                        <div className="d-flex flex-column gap-2">
+                          <div className="d-flex justify-content-between align-items-center">
+                            <div className="small text-muted">
+                              Items: <strong>MK {itemsTotal.toFixed(2)}</strong>
+                              {deliveryFee > 0 && <> · Delivery: <strong>MK {deliveryFee.toFixed(2)}</strong></>}
+                              <> · Expected: <strong>MK {expectedTotal.toFixed(2)}</strong></>
+                            </div>
                           </div>
 
-                          <div>
+                          <div className="d-flex justify-content-end gap-2">
                             {p.status === 'pending' ? (
-                              <div className="d-flex gap-2">
-                                <button className="btn btn-sm btn-outline-primary" onClick={() => openConfirm(p)}>{approving && selectedPayment?.id === p.id ? 'Approving...' : 'Approve'}</button>
-                                <button className="btn btn-sm btn-outline-danger" onClick={() => openReject(p)}>{rejecting && selectedPayment?.id === p.id ? 'Rejecting...' : 'Reject'}</button>
+                              <>
+                                <button
+                                  className="btn btn-sm btn-outline-primary"
+                                  onClick={() => { setSelectedPayment(p); openConfirm(p); }}
+                                  disabled={approving && selectedPayment?.id === p.id}
+                                >
+                                  {approving && selectedPayment?.id === p.id ? 'Approving...' : 'Approve'}
+                                </button>
+
+                                <button
+                                  className="btn btn-sm btn-outline-danger"
+                                  onClick={() => { setSelectedPayment(p); openReject(p); }}
+                                  disabled={rejecting && selectedPayment?.id === p.id}
+                                >
+                                  {rejecting && selectedPayment?.id === p.id ? 'Rejecting...' : 'Reject'}
+                                </button>
+
                                 <button className="btn btn-sm btn-outline-secondary" onClick={load}>Refresh</button>
-                              </div>
+                              </>
                             ) : (
                               <div className="text-muted small">No actions</div>
                             )}
