@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use App\Models\Cart;
 use App\Models\CartItem;
 use App\Models\Product;
+use App\Models\Payment;
 use Illuminate\Support\Facades\Auth;
 
 class CartController extends Controller
@@ -28,6 +29,40 @@ class CartController extends Controller
 
         $user = $request->user();
         $cart = Cart::firstOrCreate(['user_id' => $user->id]);
+
+        // --- NEW: prevent adding items while user has pending, non-ordered payment ---
+        $hasPending = Payment::where('user_id', $user->id)
+            ->where('status', 'pending')
+            ->whereRaw("JSON_EXTRACT(meta, '$.order_id') IS NULL")
+            ->exists();
+
+        if ($hasPending) {
+            $pending = Payment::where('user_id', $user->id)
+                ->where('status', 'pending')
+                ->whereRaw("JSON_EXTRACT(meta, '$.order_id') IS NULL")
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            $pendingHash = null;
+            if ($pending) {
+                $meta = $pending->meta;
+                if (!is_array($meta)) {
+                    try {
+                        $meta = json_decode($meta ?? '[]', true) ?: [];
+                    } catch (\Throwable $e) {
+                        $meta = [];
+                    }
+                }
+                $pendingHash = $meta['cart_hash'] ?? null;
+            }
+
+            return response()->json([
+                'success' => false,
+                'message' => 'You have a pending payment. Please wait for admin approval or cancel it before adding items.',
+                'pending_cart_hash' => $pendingHash
+            ], 409);
+        }
+        // --- end guard ---
 
         $product = Product::findOrFail($data['product_id']);
 

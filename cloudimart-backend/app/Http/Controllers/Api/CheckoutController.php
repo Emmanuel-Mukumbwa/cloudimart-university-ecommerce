@@ -41,7 +41,8 @@ class CheckoutController extends Controller
             'delivery_lat' => 'required|numeric',
             'delivery_lng' => 'required|numeric',
             'delivery_address' => 'required|string',
-            'payment_method' => 'nullable|string'
+            'payment_method' => 'nullable|string',
+            'location_id' => 'nullable|integer', // optional: helps derive delivery fee
         ]);
 
         $user = $request->user();
@@ -73,11 +74,67 @@ class CheckoutController extends Controller
             $total += ($ci->product->price * $ci->quantity);
         }
 
-        // amount check (normalize floats)
-        if (floatval($payment->amount) != floatval($total)) {
+        // --- compute delivery fee (priority):
+        // 1) payment meta (if payment already recorded it), 2) supplied location_id, 3) lookup by lat/lng via LocationService
+        $deliveryFee = 0.0;
+        try {
+            $pm = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
+            if (isset($pm['delivery_fee'])) {
+                $deliveryFee = floatval($pm['delivery_fee']);
+            } elseif (isset($data['location_id']) && $data['location_id']) {
+                // attempt a few plausible LocationService method names defensively
+                try {
+                    if (method_exists($this->locationService, 'findById')) {
+                        $loc = $this->locationService->findById($data['location_id']);
+                    } elseif (method_exists($this->locationService, 'find')) {
+                        $loc = $this->locationService->find($data['location_id']);
+                    } elseif (method_exists($this->locationService, 'getLocationById')) {
+                        $loc = $this->locationService->getLocationById($data['location_id']);
+                    } else {
+                        $loc = null;
+                    }
+                    if ($loc && (isset($loc->delivery_fee) || isset($loc['delivery_fee']))) {
+                        $deliveryFee = floatval($loc->delivery_fee ?? $loc['delivery_fee']);
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning('locationService lookup by id failed: ' . $e->getMessage());
+                }
+            } else {
+                // final fallback: ask LocationService for fee by lat/lng (if supported)
+                try {
+                    if (method_exists($this->locationService, 'feeForPoint')) {
+                        $feeCandidate = $this->locationService->feeForPoint($data['delivery_lat'], $data['delivery_lng']);
+                        $deliveryFee = floatval($feeCandidate);
+                    } elseif (method_exists($this->locationService, 'getFeeForCoordinates')) {
+                        $feeCandidate = $this->locationService->getFeeForCoordinates($data['delivery_lat'], $data['delivery_lng']);
+                        $deliveryFee = floatval($feeCandidate);
+                    } else {
+                        // nothing available — default 0.0
+                        $deliveryFee = 0.0;
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning('locationService fee lookup failed: ' . $e->getMessage());
+                    $deliveryFee = 0.0;
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Failed to read delivery_fee from payment meta: ' . $e->getMessage());
+            $deliveryFee = 0.0;
+        }
+
+        // amount check (normalize floats) — include delivery_fee in expected total
+        $expectedTotal = round(floatval($total) + floatval($deliveryFee), 2);
+        $paymentAmount = round(floatval($payment->amount), 2);
+
+        if ($paymentAmount != $expectedTotal) {
+            // helpful debug info in the response for admin/support (but client should mostly never hit this)
             return response()->json([
                 'success' => false,
-                'message' => 'Payment amount mismatch. Please contact support.'
+                'message' => 'Payment amount mismatch. Please contact support.',
+                'expected' => $expectedTotal,
+                'payment_amount' => $paymentAmount,
+                'items_total' => $total,
+                'delivery_fee' => $deliveryFee,
             ], 400);
         }
 
@@ -124,7 +181,10 @@ class CheckoutController extends Controller
                 'order_id' => $orderId,
                 'user_id' => $user->id,
                 'total' => $total,
+                'delivery_fee' => $deliveryFee, // NEW: persist delivery fee on order
                 'delivery_address' => $data['delivery_address'],
+                'delivery_lat' => $data['delivery_lat'],
+                'delivery_lng' => $data['delivery_lng'],
                 'status' => 'pending_delivery',
                 'payment_ref' => $payment->tx_ref,
             ]);

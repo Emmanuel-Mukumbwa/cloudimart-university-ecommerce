@@ -18,11 +18,13 @@ class Order extends Model
         'delivery_lat', 
         'delivery_lng',
         'status',
+        'delivery_fee', // NEW
     ];
 
     protected $casts = [
         'delivery_lat' => 'float',
         'delivery_lng' => 'float',
+        'delivery_fee' => 'float', // NEW
     ];
 
     /** Each order belongs to a user */

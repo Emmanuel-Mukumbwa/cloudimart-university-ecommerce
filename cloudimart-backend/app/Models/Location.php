@@ -10,7 +10,7 @@ class Location extends Model
     use HasFactory;
 
     protected $fillable = [
-        'name', 
+        'name',
         'slug',
         'type',
         'latitude',
@@ -21,6 +21,7 @@ class Location extends Model
         'is_active',
         'is_deliverable',
         'polygon_coordinates',
+        'delivery_fee', // added
     ];
 
     // Casts
@@ -31,5 +32,6 @@ class Location extends Model
         'is_active' => 'boolean',
         'is_deliverable' => 'boolean',
         'polygon_coordinates' => 'array',
+        'delivery_fee' => 'float', // added
     ];
 }

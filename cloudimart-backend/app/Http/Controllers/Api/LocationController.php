@@ -25,9 +25,10 @@ class LocationController extends Controller
     public function index()
     {
         // include more fields (id, name, latitude, longitude, radius_km) for fallback usage
+        // <-- minimal change: include delivery_fee so frontend receives it
         $locations = Location::where('is_active', true)
             ->orderBy('name')
-            ->get(['id', 'name', 'latitude', 'longitude', 'radius_km']);
+            ->get(['id', 'name', 'latitude', 'longitude', 'radius_km', 'delivery_fee']);
 
         return response()->json([
             'success' => true,
@@ -106,7 +107,12 @@ class LocationController extends Controller
                 $inside = $dist <= (float)$area->radius_km;
             }
             if ($inside) {
-                $detected = ['id' => $area->id, 'name' => $area->name];
+                // <-- minimal change: include delivery_fee in detected object
+                $detected = [
+                    'id' => $area->id,
+                    'name' => $area->name,
+                    'delivery_fee' => $area->delivery_fee ?? 0,
+                ];
                 break;
             }
         }
@@ -142,7 +148,10 @@ class LocationController extends Controller
                 ];
 
                 $user->delivery_verified_at = now();
-                $user->delivery_verified_meta = $meta;
+
+                // <-- minimal change: persist as JSON string to avoid casting/save errors
+                // If your User model casts delivery_verified_meta to array/json, you can remove json_encode and assign the array directly.
+                $user->delivery_verified_meta = json_encode($meta);
                 $user->save();
 
                 Log::info('Persisted delivery verification', ['user_id' => $user->id, 'meta' => $meta]);

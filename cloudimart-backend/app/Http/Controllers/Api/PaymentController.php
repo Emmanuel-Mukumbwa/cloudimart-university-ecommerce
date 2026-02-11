@@ -85,7 +85,7 @@ class PaymentController extends Controller
 
     /**
      * POST /api/payment/initiate
-     * Expects: amount, mobile, network, delivery_lat, delivery_lng, delivery_address, cart_hash
+     * Expects: amount, mobile, network, delivery_lat, delivery_lng, delivery_address, cart_hash, location_id (optional)
      * Returns: { checkout_url, tx_ref, payment }
      */
     public function initiate(Request $request)
@@ -98,6 +98,7 @@ class PaymentController extends Controller
             'delivery_lng' => 'nullable|numeric',
             'delivery_address' => 'nullable|string',
             'cart_hash' => 'nullable|string',
+            'location_id' => 'nullable|integer',
         ]);
 
         $userId = auth()->id();
@@ -121,23 +122,46 @@ class PaymentController extends Controller
             }
         }
 
+        // determine authoritative delivery fee from provided location_id (if any)
+        $locationId = $request->input('location_id') ?? null;
+        $deliveryFee = 0.0;
+        if ($locationId) {
+            try {
+                $locFee = DB::table('locations')->where('id', $locationId)->value('delivery_fee');
+                if ($locFee !== null) {
+                    $deliveryFee = floatval($locFee);
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Failed to fetch location delivery_fee: ' . $e->getMessage(), ['location_id' => $locationId]);
+                $deliveryFee = 0.0;
+            }
+        } else {
+            // optional: attempt to derive fee from cartHash or user's saved location in future
+            $deliveryFee = 0.0;
+        }
+
         // create unique merchant tx ref
         $txRef = uniqid('pay_');
 
-        // If amounts differ, prefer server-computed total (authoritative)
+        // Server-authoritative total: items + delivery fee
+        $serverTotal = floatval($cartTotal) + floatval($deliveryFee);
+
+        // If client amount differs, prefer server-computed total (authoritative)
         $requestedAmount = (float) $request->amount;
-        if (abs($requestedAmount - $cartTotal) > 0.01) {
-            Log::info("Payment initiate: client amount mismatch, using server cart total", [
+        if (abs($requestedAmount - $serverTotal) > 0.01) {
+            Log::info("Payment initiate: client amount mismatch, using server cart total + delivery fee", [
                 'user_id' => $userId,
                 'requested' => $requestedAmount,
                 'cart_total' => $cartTotal,
+                'delivery_fee' => $deliveryFee,
+                'server_total' => $serverTotal,
             ]);
-            $amountToUse = $cartTotal > 0 ? $cartTotal : $requestedAmount;
+            $amountToUse = $serverTotal > 0 ? $serverTotal : $requestedAmount;
         } else {
             $amountToUse = $requestedAmount;
         }
 
-        // Create a local payment record (include snapshot & cart_total in meta)
+        // Create a local payment record (include snapshot & cart_total & delivery_fee in meta)
         $payment = Payment::create([
             'user_id' => $userId,
             'tx_ref' => $txRef,
@@ -150,6 +174,8 @@ class PaymentController extends Controller
                 'delivery_lat' => $request->delivery_lat,
                 'delivery_lng' => $request->delivery_lng,
                 'delivery_address' => $request->delivery_address,
+                'location_id' => $locationId,
+                'delivery_fee' => $deliveryFee,
                 'cart_hash' => $request->cart_hash ?? null,
                 'cart_total' => $cartTotal,
                 'cart_snapshot' => $cartSnapshot,
@@ -177,6 +203,9 @@ class PaymentController extends Controller
                 'meta' => [
                     'source' => 'LaravelApi',
                     'payment_id' => $payment->id,
+                    // include delivery_fee & cart_hash to help reconciliation on provider side if needed
+                    'delivery_fee' => $deliveryFee,
+                    'cart_hash' => $request->cart_hash ?? null,
                 ],
             ];
 
@@ -343,7 +372,7 @@ class PaymentController extends Controller
 
     /**
      * POST /api/payment/upload-proof
-     * Fields: file, amount, mobile, network, delivery_lat, delivery_lng, delivery_address, note, cart_hash
+     * Fields: file, amount, mobile, network, delivery_lat, delivery_lng, delivery_address, note, cart_hash, location_id (optional)
      */
     public function uploadProof(Request $request)
     {
@@ -360,6 +389,7 @@ class PaymentController extends Controller
             'delivery_address' => 'nullable|string',
             'note' => 'nullable|string',
             'cart_hash' => 'nullable|string',
+            'location_id' => 'nullable|integer',
         ]);
 
         DB::beginTransaction();
@@ -386,12 +416,25 @@ class PaymentController extends Controller
                 }
             }
 
+            // determine delivery fee if location_id present
+            $locationId = $validated['location_id'] ?? null;
+            $deliveryFee = 0.0;
+            if ($locationId) {
+                try {
+                    $locFee = DB::table('locations')->where('id', $locationId)->value('delivery_fee');
+                    if ($locFee !== null) $deliveryFee = floatval($locFee);
+                } catch (\Throwable $e) {
+                    Log::warning('Failed to fetch location delivery_fee for uploadProof: ' . $e->getMessage(), ['location_id' => $locationId]);
+                    $deliveryFee = 0.0;
+                }
+            }
+
             $txRef = 'proof_' . uniqid();
 
             $payment = Payment::create([
                 'user_id' => $user->id,
                 'tx_ref' => $txRef,
-                'amount' => $validated['amount'],
+                'amount' => $validated['amount'], // store what user claims to have paid
                 'currency' => 'MWK',
                 'status' => 'pending',
                 'mobile' => $validated['mobile'],
@@ -401,6 +444,8 @@ class PaymentController extends Controller
                     'delivery_lat' => $validated['delivery_lat'] ?? null,
                     'delivery_lng' => $validated['delivery_lng'] ?? null,
                     'delivery_address' => $validated['delivery_address'] ?? null,
+                    'location_id' => $locationId,
+                    'delivery_fee' => $deliveryFee,
                     'cart_hash' => $validated['cart_hash'] ?? null,
                     'cart_total' => $cartTotal,
                     'cart_snapshot' => $cartSnapshot,
@@ -461,6 +506,7 @@ class PaymentController extends Controller
             $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
             $cartSnapshot = $meta['cart_snapshot'] ?? null;
             $cartTotalFromMeta = isset($meta['cart_total']) ? floatval($meta['cart_total']) : null;
+            $deliveryFeeFromMeta = isset($meta['delivery_fee']) ? floatval($meta['delivery_fee']) : 0.0;
 
             if ($cartSnapshot && is_array($cartSnapshot) && count($cartSnapshot) > 0) {
                 // Use snapshot to check stock and compute total
@@ -492,25 +538,35 @@ class PaymentController extends Controller
                     return response()->json(['success' => false, 'message' => 'Some items are out of stock', 'items' => $insufficient], 409);
                 }
 
-                // verify the payment amount matches snapshot total
-                if (floatval($payment->amount) != floatval($total)) {
-                    $meta['amount_mismatch'] = ['payment' => $payment->amount, 'snapshot_total' => $total];
+                // verify the payment amount matches snapshot total + delivery_fee (if any)
+                $expectedTotal = floatval($total) + floatval($deliveryFeeFromMeta);
+                if (floatval($payment->amount) != floatval($expectedTotal)) {
+                    $meta['amount_mismatch'] = [
+                        'payment' => $payment->amount,
+                        'snapshot_total' => $total,
+                        'delivery_fee' => $deliveryFeeFromMeta,
+                        'expected_total' => $expectedTotal
+                    ];
                     $payment->meta = $meta;
                     $payment->save();
                     DB::rollBack();
                     return response()->json(['message' => 'Amount mismatch', 'meta' => $meta], 422);
                 }
 
-                // create order from snapshot
+                // create order from snapshot (include delivery_fee)
                 $orderId = 'ORD-' . date('Ymd') . '-' . strtoupper(Str::random(6));
-                $order = Order::create([
+                $orderData = [
                     'order_id' => $orderId,
                     'user_id' => $user->id,
-                    'total' => $total,
+                    'total' => $expectedTotal,
                     'delivery_address' => data_get($payment->meta, 'delivery_address') ?? null,
                     'status' => 'pending_delivery',
                     'payment_ref' => $payment->tx_ref,
-                ]);
+                ];
+                // if orders table has delivery_fee column, include it
+                $orderData['delivery_fee'] = $deliveryFeeFromMeta;
+
+                $order = Order::create($orderData);
 
                 foreach ($cartSnapshot as $ci) {
                     OrderItem::create([
@@ -596,9 +652,12 @@ class PaymentController extends Controller
                 $total += ($ci->product->price * $ci->quantity);
             }
 
-            if (floatval($payment->amount) != floatval($total)) {
+            $deliveryFeeFromMeta = isset($payment->meta['delivery_fee']) ? floatval($payment->meta['delivery_fee']) : 0.0;
+            $expectedTotal = floatval($total) + floatval($deliveryFeeFromMeta);
+
+            if (floatval($payment->amount) != floatval($expectedTotal)) {
                 $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
-                $meta['amount_mismatch'] = ['payment' => $payment->amount, 'cart_total' => $total];
+                $meta['amount_mismatch'] = ['payment' => $payment->amount, 'cart_total' => $total, 'delivery_fee' => $deliveryFeeFromMeta, 'expected_total' => $expectedTotal];
                 $payment->meta = $meta;
                 $payment->save();
 
@@ -625,14 +684,17 @@ class PaymentController extends Controller
 
             $orderId = 'ORD-' . date('Ymd') . '-' . strtoupper(Str::random(6));
 
-            $order = Order::create([
+            $orderData = [
                 'order_id' => $orderId,
                 'user_id' => $user->id,
-                'total' => $total,
+                'total' => $expectedTotal,
                 'delivery_address' => data_get($payment->meta, 'delivery_address') ?? null,
                 'status' => 'pending_delivery',
                 'payment_ref' => $payment->tx_ref,
-            ]);
+            ];
+            $orderData['delivery_fee'] = $deliveryFeeFromMeta;
+
+            $order = Order::create($orderData);
 
             foreach ($cart->items as $ci) {
                 OrderItem::create([

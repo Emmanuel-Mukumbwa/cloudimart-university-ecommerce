@@ -14,7 +14,7 @@ class LocationCoordinatesSeeder extends Seeder
     public function run(): void
     {
         $now = Carbon::now();
-
+ 
         $locations = [
             [
                 'name' => 'Mzuzu University',
