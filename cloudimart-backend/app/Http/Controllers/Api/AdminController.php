@@ -925,14 +925,207 @@ public function rejectPayment(Request $request, $id)
         return response()->json(['success' => true]);
     }
 
-    /**
+       /**
      * GET /api/admin/locations
+     * List locations with optional search and filters.
+     * Query params:
+     *  - q: search by name or address
+     *  - is_active: 0|1
+     *  - per_page: integer (use per_page=0 for all)
      */
     public function locations(Request $request)
-    { 
+    {
         $this->ensureAdmin($request->user());
-        $locations = Location::orderBy('name','asc')->paginate(30);
-        return response()->json($locations);
+
+        try {
+            $q = Location::query();
+
+            if ($request->has('q')) {
+                $term = trim($request->get('q'));
+                $q->where(function ($sub) use ($term) {
+                    $sub->where('name', 'like', "%{$term}%")
+                        ->orWhere('address', 'like', "%{$term}%")
+                        ->orWhere('slug', 'like', "%{$term}%");
+                });
+            }
+
+            if ($request->has('is_active')) {
+                $isActive = $request->get('is_active') ? 1 : 0;
+                $q->where('is_active', $isActive);
+            }
+
+            // ordering
+            $q->orderBy('name', 'asc');
+
+            $perPage = intval($request->get('per_page', 30));
+            if ($perPage <= 0) {
+                // return all
+                $locations = $q->get();
+                return response()->json(['data' => $locations], 200);
+            }
+
+            $perPage = min(200, max(5, $perPage)); // clamp
+            $paginated = $q->paginate($perPage);
+
+            return response()->json($paginated, 200);
+        } catch (\Throwable $e) {
+            Log::error('Admin.locations error: ' . $e->getMessage());
+            return response()->json(['message' => 'Failed to load locations'], 500);
+        }
+    }
+
+    /**
+     * GET /api/admin/locations/{id}
+     */
+    public function showLocation(Request $request, $id)
+    {
+        $this->ensureAdmin($request->user());
+
+        try {
+            $loc = Location::findOrFail($id);
+            return response()->json(['data' => $loc], 200);
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json(['message' => 'Location not found'], 404);
+        } catch (\Throwable $e) {
+            Log::error('Admin.showLocation error: ' . $e->getMessage());
+            return response()->json(['message' => 'Failed to load location'], 500);
+        }
+    }
+
+    /**
+     * POST /api/admin/locations
+     * Create a new location
+     */
+    public function createLocation(Request $request)
+    {
+        $this->ensureAdmin($request->user());
+
+        $data = $request->validate([
+            'name' => 'required|string|max:255|unique:locations,name',
+            'slug' => 'nullable|string|max:255|unique:locations,slug',
+            'type' => 'nullable|string|max:255',
+            'latitude' => 'nullable|numeric',
+            'longitude' => 'nullable|numeric',
+            'radius_km' => 'nullable|numeric',
+            'delivery_fee' => 'nullable|numeric',
+            'description' => 'nullable|string',
+            'address' => 'nullable|string|max:255',
+            'is_active' => 'nullable|boolean',
+            'polygon_coordinates' => ['nullable'], // accept json string or array; validate below
+        ]);
+
+        try {
+            // Normalize polygon_coordinates: accept array or JSON string
+            if ($request->has('polygon_coordinates')) {
+                $pc = $request->input('polygon_coordinates');
+                if (is_array($pc)) {
+                    $data['polygon_coordinates'] = json_encode($pc);
+                } elseif (is_string($pc) && strlen(trim($pc)) > 0) {
+                    // verify valid JSON
+                    $decoded = json_decode($pc, true);
+                    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                        $data['polygon_coordinates'] = json_encode($decoded);
+                    } else {
+                        return response()->json(['message' => 'polygon_coordinates must be valid JSON or an array'], 422);
+                    }
+                } else {
+                    $data['polygon_coordinates'] = null;
+                }
+            }
+
+            // coerce numeric defaults
+            $data['delivery_fee'] = isset($data['delivery_fee']) ? floatval($data['delivery_fee']) : 0.0;
+            $data['radius_km'] = isset($data['radius_km']) ? floatval($data['radius_km']) : null;
+            $data['latitude'] = isset($data['latitude']) ? floatval($data['latitude']) : null;
+            $data['longitude'] = isset($data['longitude']) ? floatval($data['longitude']) : null;
+            $data['is_active'] = isset($data['is_active']) ? boolval($data['is_active']) : true;
+
+            $loc = Location::create($data);
+
+            return response()->json(['success' => true, 'location' => $loc], 201);
+        } catch (\Throwable $e) {
+            Log::error('Admin.createLocation error: ' . $e->getMessage());
+            return response()->json(['message' => 'Failed to create location'], 500);
+        }
+    }
+
+    /**
+     * PUT /api/admin/locations/{id}
+     * Update an existing location
+     */
+    public function updateLocation(Request $request, $id)
+    {
+        $this->ensureAdmin($request->user());
+
+        try {
+            $loc = Location::findOrFail($id);
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json(['message' => 'Location not found'], 404);
+        }
+
+        $data = $request->validate([
+            'name' => ['nullable','string','max:255', Rule::unique('locations','name')->ignore($loc->id)],
+            'slug' => ['nullable','string','max:255', Rule::unique('locations','slug')->ignore($loc->id)],
+            'type' => 'nullable|string|max:255',
+            'latitude' => 'nullable|numeric',
+            'longitude' => 'nullable|numeric',
+            'radius_km' => 'nullable|numeric',
+            'delivery_fee' => 'nullable|numeric',
+            'description' => 'nullable|string',
+            'address' => 'nullable|string|max:255',
+            'is_active' => 'nullable|boolean',
+            'polygon_coordinates' => ['nullable'], // validate below
+        ]);
+
+        try {
+            if ($request->has('polygon_coordinates')) {
+                $pc = $request->input('polygon_coordinates');
+                if (is_array($pc)) {
+                    $data['polygon_coordinates'] = json_encode($pc);
+                } elseif (is_string($pc) && strlen(trim($pc)) > 0) {
+                    $decoded = json_decode($pc, true);
+                    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                        $data['polygon_coordinates'] = json_encode($decoded);
+                    } else {
+                        return response()->json(['message' => 'polygon_coordinates must be valid JSON or an array'], 422);
+                    }
+                } else {
+                    $data['polygon_coordinates'] = null;
+                }
+            }
+
+            if (isset($data['delivery_fee'])) $data['delivery_fee'] = floatval($data['delivery_fee']);
+            if (isset($data['radius_km'])) $data['radius_km'] = floatval($data['radius_km']);
+            if (isset($data['latitude'])) $data['latitude'] = floatval($data['latitude']);
+            if (isset($data['longitude'])) $data['longitude'] = floatval($data['longitude']);
+            if (isset($data['is_active'])) $data['is_active'] = boolval($data['is_active']);
+
+            $loc->update($data);
+
+            return response()->json(['success' => true, 'location' => $loc->fresh()], 200);
+        } catch (\Throwable $e) {
+            Log::error('Admin.updateLocation error: ' . $e->getMessage());
+            return response()->json(['message' => 'Failed to update location'], 500);
+        }
+    }
+
+    /**
+     * DELETE /api/admin/locations/{id}
+     */
+    public function deleteLocation(Request $request, $id)
+    {
+        $this->ensureAdmin($request->user());
+
+        try {
+            $loc = Location::findOrFail($id);
+            $loc->delete();
+            return response()->json(['success' => true, 'message' => 'Location deleted'], 200);
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json(['message' => 'Location not found'], 404);
+        } catch (\Throwable $e) {
+            Log::error('Admin.deleteLocation error: ' . $e->getMessage());
+            return response()->json(['message' => 'Failed to delete location'], 500);
+        }
     }
 
     /**
@@ -967,4 +1160,4 @@ public function summary(Request $request)
     }
 }
 
-}
+} 
