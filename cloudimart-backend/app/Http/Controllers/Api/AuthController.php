@@ -59,6 +59,7 @@ class AuthController extends Controller
                     'location_id'          => $request->location_id,
                     'latitude'             => $request->latitude,
                     'longitude'            => $request->longitude,
+                    // set location_verified_at if coordinates matched a delivery zone
                     'location_verified_at' => $location_verified ? now() : null,
                     'role'                 => 'user', // ensure default role
                 ]);
@@ -72,6 +73,7 @@ class AuthController extends Controller
                 'message'         => 'User registered successfully',
                 'user'            => $user,
                 'token'           => $token,
+                'access_token'    => $token, // friendly key for frontend compatibility
                 'token_type'      => 'Bearer',
                 'redirect_url'    => $this->redirectForRole($user->role),
                 'location_status' => $user->location_verified_at ? 'verified' : 'unverified',
@@ -107,6 +109,14 @@ class AuthController extends Controller
             ]);
         }
 
+        // check active flag
+        if (! $user->is_active) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Your account has been deactivated. Contact support to reactivate.',
+            ], 403);
+        }
+
         // revoke previous tokens optionally (uncomment if you want only single-session)
         // $user->tokens()->delete();
 
@@ -117,6 +127,7 @@ class AuthController extends Controller
             'message'         => 'Login successful',
             'user'            => $user,
             'token'           => $token,
+            'access_token'    => $token,
             'token_type'      => 'Bearer',
             'redirect_url'    => $this->redirectForRole($user->role),
             'location_status' => $user->location_verified_at ? 'verified' : 'unverified',

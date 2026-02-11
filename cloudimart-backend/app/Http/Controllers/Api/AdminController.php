@@ -591,26 +591,31 @@ public function completeDelivery(Request $request, $id)
             $cartSnapshot = $meta['cart_snapshot'] ?? null;
             $cartTotalFromMeta = isset($meta['cart_total']) ? floatval($meta['cart_total']) : null;
 
+            // read delivery_fee from meta (default 0)
+            $deliveryFeeFromMeta = isset($meta['delivery_fee']) ? floatval($meta['delivery_fee']) : 0.0;
+
             if ($cartSnapshot && is_array($cartSnapshot) && count($cartSnapshot) > 0) {
                 // Use snapshot to check stock and compute total
                 $total = 0;
                 $insufficient = [];
 
                 foreach ($cartSnapshot as $ci) {
+                    // support both qty and quantity keys in snapshot
+                    $qty = isset($ci['qty']) ? intval($ci['qty']) : (isset($ci['quantity']) ? intval($ci['quantity']) : 0);
                     $productRow = DB::table('products')->where('id', $ci['product_id'])->lockForUpdate()->first();
                     if (!$productRow) {
                         DB::rollBack();
                         return response()->json(['success' => false, 'message' => "Product (ID {$ci['product_id']}) not found"], 400);
                     }
                     $currentStock = intval($productRow->stock ?? 0);
-                    if ($currentStock < intval($ci['qty'])) {
+                    if ($currentStock < $qty) {
                         $insufficient[] = [
                             'product_id' => $ci['product_id'],
                             'available' => $currentStock,
-                            'requested' => intval($ci['qty']),
+                            'requested' => $qty,
                         ];
                     }
-                    $total += floatval($ci['price']) * intval($ci['qty']);
+                    $total += floatval($ci['price']) * $qty;
                 }
 
                 if (!empty($insufficient)) {
@@ -621,35 +626,45 @@ public function completeDelivery(Request $request, $id)
                     return response()->json(['success' => false, 'message' => 'Some items are out of stock', 'items' => $insufficient], 409);
                 }
 
-                // verify the payment amount matches snapshot total
-                if (floatval($payment->amount) != floatval($total)) {
-                    $meta['amount_mismatch'] = ['payment' => $payment->amount, 'snapshot_total' => $total];
+                // include delivery fee into expected total
+                $totalWithFee = floatval($total) + floatval($deliveryFeeFromMeta);
+
+                // verify the payment amount matches snapshot total + fee
+                if (floatval($payment->amount) != floatval($totalWithFee)) {
+                    $meta['amount_mismatch'] = [
+                        'payment' => $payment->amount,
+                        'snapshot_total' => $total,
+                        'delivery_fee' => $deliveryFeeFromMeta,
+                        'expected_total' => $totalWithFee
+                    ];
                     $payment->meta = $meta;
                     $payment->save();
                     DB::rollBack();
                     return response()->json(['message' => 'Amount mismatch', 'meta' => $meta], 422);
                 }
 
-                // create order from snapshot
+                // create order from snapshot (include delivery_fee)
                 $orderId = 'ORD-' . date('Ymd') . '-' . strtoupper(Str::random(6));
                 $order = Order::create([
                     'order_id' => $orderId,
                     'user_id' => $user->id,
-                    'total' => $total,
+                    'total' => $totalWithFee,
+                    'delivery_fee' => $deliveryFeeFromMeta,
                     'delivery_address' => data_get($payment->meta, 'delivery_address') ?? null,
                     'status' => 'pending_delivery',
                     'payment_ref' => $payment->tx_ref,
                 ]);
 
                 foreach ($cartSnapshot as $ci) {
+                    $qty = isset($ci['qty']) ? intval($ci['qty']) : (isset($ci['quantity']) ? intval($ci['quantity']) : 0);
                     OrderItem::create([
                         'order_id' => $order->id,
                         'product_id' => $ci['product_id'],
-                        'quantity' => $ci['qty'],
+                        'quantity' => $qty,
                         'price' => $ci['price'],
                     ]);
 
-                    DB::table('products')->where('id', $ci['product_id'])->decrement('stock', $ci['qty']);
+                    DB::table('products')->where('id', $ci['product_id'])->decrement('stock', $qty);
                 }
 
                 // If the user's current cart exactly matches the snapshot, clear it. Otherwise preserve it.
@@ -662,7 +677,8 @@ public function completeDelivery(Request $request, $id)
                     }
                     $snapMap = [];
                     foreach ($cartSnapshot as $s) {
-                        $snapMap[intval($s['product_id'])] = intval($s['qty']);
+                        $snapQty = isset($s['qty']) ? intval($s['qty']) : (isset($s['quantity']) ? intval($s['quantity']) : 0);
+                        $snapMap[intval($s['product_id'])] = $snapQty;
                     }
                     if (count($currentMap) === count($snapMap)) {
                         $allEqual = true;
@@ -721,9 +737,17 @@ public function completeDelivery(Request $request, $id)
                 $total += ($ci->product->price * $ci->quantity);
             }
 
-            if (floatval($payment->amount) != floatval($total)) {
+            // include any delivery fee from payment meta
+            $totalWithFee = floatval($total) + floatval($deliveryFeeFromMeta);
+
+            if (floatval($payment->amount) != floatval($totalWithFee)) {
                 $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
-                $meta['amount_mismatch'] = ['payment' => $payment->amount, 'cart_total' => $total];
+                $meta['amount_mismatch'] = [
+                    'payment' => $payment->amount,
+                    'cart_total' => $total,
+                    'delivery_fee' => $deliveryFeeFromMeta,
+                    'expected_total' => $totalWithFee
+                ];
                 $payment->meta = $meta;
                 $payment->save();
 
@@ -763,7 +787,8 @@ public function completeDelivery(Request $request, $id)
             $order = Order::create([
                 'order_id' => $orderId,
                 'user_id' => $user->id,
-                'total' => $total,
+                'total' => $totalWithFee,
+                'delivery_fee' => $deliveryFeeFromMeta,
                 'delivery_address' => data_get($payment->meta, 'delivery_address') ?? null,
                 'status' => 'pending_delivery',
                 'payment_ref' => $payment->tx_ref,
@@ -943,4 +968,3 @@ public function summary(Request $request)
 }
 
 }
-
