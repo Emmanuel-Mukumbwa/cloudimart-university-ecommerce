@@ -15,6 +15,7 @@ type Loc = {
   latitude?: number | null;
   longitude?: number | null;
   radius_km?: number | null;
+  delivery_fee?: number | null; // optional
 };
 
 export default function CheckoutPage() {
@@ -41,6 +42,7 @@ export default function CheckoutPage() {
   // Locations dropdown + fallback
   const [locations, setLocations] = useState<Loc[]>([]);
   const [selectedLocationId, setSelectedLocationId] = useState<number | ''>('');
+  const [deliveryFee, setDeliveryFee] = useState<number>(0); // NEW: selected location fee
   const [showFallbackChoice, setShowFallbackChoice] = useState(false);
 
   // Modal (generic messages)
@@ -258,11 +260,14 @@ export default function CheckoutPage() {
       setCoveredAmount(covered);
 
       const currentTotal = itemsToUse?.reduce((s: number, i: any) => s + Number(i.product?.price ?? 0) * (i.quantity ?? 1), 0) ?? total;
-      setRemainingToPay(Math.max(0, currentTotal - covered));
+
+      // REMEMBER: coveredAmount here is item-level reserved money; remainingToPay should include delivery fee
+      const fee = Number(deliveryFee ?? 0);
+      setRemainingToPay(Math.max(0, currentTotal + fee - covered));
     } catch (e) {
       setReservedByProduct({});
       setCoveredAmount(0);
-      setRemainingToPay(total);
+      setRemainingToPay(total + Number(deliveryFee ?? 0));
     }
   };
 
@@ -382,6 +387,18 @@ export default function CheckoutPage() {
       }
     }
   };
+
+  // effect: whenever locations or selectedLocationId change, compute deliveryFee and recalc totals
+  useEffect(() => {
+    const loc = locations.find((l) => Number(l.id) === Number(selectedLocationId));
+    const fee = loc && typeof loc.delivery_fee !== 'undefined' && loc.delivery_fee !== null ? Number(loc.delivery_fee) : 0;
+    setDeliveryFee(fee);
+
+    // Recompute reservations/remaining to include updated fee
+    // pass cartItems snapshot to avoid async state race
+    loadAllPendingPayments(cartHash, cartItems).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedLocationId, locations]);
 
   // Validate coordinates via backend and set detected/verified state
   const validatePointAndSet = async (lat: number, lng: number, location_id?: number | '') => {
@@ -645,7 +662,7 @@ export default function CheckoutPage() {
       return;
     }
 
-    // compute current remaining for current snapshot
+    // compute current remaining for current snapshot + delivery fee
     const currentSnapshot = (cartItems || []).map((ci: any) => ({
       product_id: Number(ci.product?.id ?? ci.product_id ?? 0),
       name: ci.product?.name ?? ci.name ?? '',
@@ -653,22 +670,36 @@ export default function CheckoutPage() {
       quantity: Number(ci.quantity ?? 0),
     }));
     const currentTotal = snapshotTotal(currentSnapshot);
-    const currentPayments = allNonOrderedPayments.filter((p) => (p.meta?.cart_hash ?? null) === (cartHash ?? null));
-    const currentCovered = computeCoveredForSnapshot(currentSnapshot, currentPayments);
-    const currentRemaining = Math.max(0, currentTotal - currentCovered);
+    const fee = Number(deliveryFee ?? 0);
+    const expectedTotal = currentTotal + fee;
 
-    openPaymentModalForCart(cartHash, currentRemaining <= 0 ? currentTotal : currentRemaining);
+    // payments for current cart
+    const paymentsForCurrent = allNonOrderedPayments.filter((p) => String(p.meta?.cart_hash ?? '') === String(cartHash ?? ''));
+    // consider only pending+success as "covered" money
+    const coveredMoney = paymentsForCurrent
+      .filter((p) => (p.status === 'pending' || p.status === 'success'))
+      .reduce((s, p) => s + Number(p.amount ?? 0), 0);
+    const currentRemaining = Math.max(0, expectedTotal - Math.min(coveredMoney, expectedTotal));
+
+    openPaymentModalForCart(cartHash, currentRemaining <= 0 ? expectedTotal : currentRemaining);
   };
 
-  // On PayChangu initiation (now includes cart_hash) — use amount from payload or modal context
-  const handleInitiatePayChangu = async (payload: { amount?: number; mobile: string; network: string; delivery_lat?: number; delivery_lng?: number; delivery_address?: string; cart_hash?: string | null }) => {
+  // On PayChangu initiation (now includes cart_hash and location_id) — use amount from payload or modal context
+  const handleInitiatePayChangu = async (payload: { amount?: number; mobile: string; network: string; delivery_lat?: number; delivery_lng?: number; delivery_address?: string; cart_hash?: string | null; location_id?: number | null }) => {
     setPaymentLoading(true);
     try {
       // prefer payload.amount, otherwise prefer modal context amount, otherwise remainingToPay
       const modalAmount = paymentModalContext?.amount;
-      const amountToSend = typeof payload.amount === 'number' ? payload.amount : (typeof modalAmount === 'number' ? modalAmount : (remainingToPay ?? total));
+      const amountToSend = typeof payload.amount === 'number' ? payload.amount : (typeof modalAmount === 'number' ? modalAmount : (remainingToPay ?? (total + Number(deliveryFee ?? 0))));
       const targetCartHash = payload.cart_hash ?? paymentModalContext?.cart_hash ?? cartHash;
-      const body = { ...payload, amount: amountToSend, cart_hash: targetCartHash, delivery_address: payload.delivery_address ?? address ?? '' };
+      const body = {
+        ...payload,
+        amount: amountToSend,
+        cart_hash: targetCartHash,
+        delivery_address: payload.delivery_address ?? address ?? '',
+        location_id: payload.location_id ?? selectedLocationId ?? null, // include location_id so server picks correct fee
+      };
+
       const res = await client.post('/api/payment/initiate', body);
       const checkoutUrl = res.data?.checkout_url ?? res.data?.data?.checkout_url;
       const txRef = res.data?.tx_ref ?? res.data?.data?.tx_ref ?? res.data?.payment?.tx_ref ?? null;
@@ -706,13 +737,14 @@ export default function CheckoutPage() {
     }
   };
 
-  // handleUploadProof (updated)
+  // handleUploadProof (updated) - ensure location_id & cart_hash appended
   const handleUploadProof = async (formData: FormData) => {
     setPaymentLoading(true);
     try {
       // If modal context exists and caller didn't set cart_hash, append it
       if (!formData.get('cart_hash') && paymentModalContext?.cart_hash) formData.append('cart_hash', String(paymentModalContext.cart_hash));
       if (!formData.get('delivery_address') && address && address.trim().length > 0) formData.append('delivery_address', address.trim());
+      if (!formData.get('location_id') && selectedLocationId) formData.append('location_id', String(selectedLocationId));
 
       // IMPORTANT: ensure axios does NOT force a Content-Type (so browser can add boundary)
       // Passing Content-Type: undefined will override default application/json if it's set globally.
@@ -880,9 +912,9 @@ export default function CheckoutPage() {
 
   // Derived banners & coverage calculation
   const pendingPayments = allNonOrderedPayments.filter((p) => (p.status ?? '') === 'pending');
-  const pendingForCurrent = pendingPayments.find((p) => (p.meta?.cart_hash ?? null) === (cartHash ?? null)) ?? null;
-  const failedForCurrent = allNonOrderedPayments.find((p) => (p.status ?? '') === 'failed' && (p.meta?.cart_hash ?? null) === (cartHash ?? null)) ?? null;
-  const pendingForOthers = pendingPayments.filter((p) => (p.meta?.cart_hash ?? null) !== (cartHash ?? null));
+  const pendingForCurrent = pendingPayments.find((p) => String(p.meta?.cart_hash ?? '') === String(cartHash ?? '')) ?? null;
+  const failedForCurrent = allNonOrderedPayments.find((p) => (p.status ?? '') === 'failed' && String(p.meta?.cart_hash ?? '') === String(cartHash ?? '')) ?? null;
+  const pendingForOthers = pendingPayments.filter((p) => String(p.meta?.cart_hash ?? '') !== String(cartHash ?? ''));
 
   // Compute covered amount display more simply if userPayments include pending entries for current cart
   const computeCoveredFromUserPayments = () => {
@@ -890,9 +922,16 @@ export default function CheckoutPage() {
       if (!Array.isArray(userPayments)) return 0;
       let covered = 0;
       userPayments.forEach((p) => {
-        if ((p.meta?.cart_hash ?? null) !== (cartHash ?? null)) return;
+        if (String(p.meta?.cart_hash ?? '') !== String(cartHash ?? '')) return;
         if ((p.status ?? '') !== 'success' && (p.status ?? '') !== 'pending') return;
         if (!Array.isArray(p.meta?.cart_snapshot)) return;
+        // for manual proof or gateway payments, prefer counting money amount (safer)
+        // fallback to snapshot-based coverage if no amount present
+        const pAmount = Number(p.amount ?? 0);
+        if (pAmount > 0) {
+          covered += pAmount;
+          return;
+        }
         p.meta.cart_snapshot.forEach((si: any) => {
           const pid = Number(si.product_id ?? si.productId ?? 0);
           const qty = Number(si.quantity ?? 0);
@@ -905,14 +944,18 @@ export default function CheckoutPage() {
           }
         });
       });
-      return covered;
+      // cap covered to expected total
+      const snapshot = (cartItems || []).map((ci: any) => ({ price: Number(ci.product?.price ?? 0), quantity: Number(ci.quantity ?? 0) }));
+      const itemsTotal = snapshot.reduce((s: number, it: any) => s + (it.price * it.quantity), 0);
+      const expectedTotal = itemsTotal + Number(deliveryFee ?? 0);
+      return Math.min(covered, expectedTotal);
     } catch {
       return 0;
     }
   };
 
   const coveredFromUserPayments = computeCoveredFromUserPayments();
-  const remaining = Math.max(0, total - coveredFromUserPayments);
+  const remaining = Math.max(0, total + Number(deliveryFee ?? 0) - coveredFromUserPayments);
 
   // UI render
   return (
@@ -930,12 +973,17 @@ export default function CheckoutPage() {
         onClose={() => { setShowPaymentModal(false); setPaymentModalContext(null); }}
         onInitiatePayChangu={async (payload) => {
           // ensure the cart_hash is passed from modal context if caller doesn't
-          const body = { ...payload, cart_hash: payload.cart_hash ?? paymentModalContext?.cart_hash ?? cartHash };
+          const body = {
+            ...payload,
+            cart_hash: payload.cart_hash ?? paymentModalContext?.cart_hash ?? cartHash,
+            location_id: payload.location_id ?? paymentModalContext?.location_id ?? selectedLocationId ?? null,
+          };
           return handleInitiatePayChangu(body);
         }}
         onUploadProof={async (formData) => {
-          // ensure modal's cart_hash is applied if present
+          // ensure modal's cart_hash & location_id are applied if present
           if (!formData.get('cart_hash') && paymentModalContext?.cart_hash) formData.append('cart_hash', String(paymentModalContext.cart_hash));
+          if (!formData.get('location_id') && selectedLocationId) formData.append('location_id', String(selectedLocationId));
           return handleUploadProof(formData);
         }}
       />
@@ -1047,7 +1095,7 @@ export default function CheckoutPage() {
                       <option value="">Choose location</option>
                       {locations.map((l) => (
                         <option key={l.id} value={l.id}>
-                          {l.name}
+                          {l.name}{l.delivery_fee ? ` — MK ${Number(l.delivery_fee).toFixed(2)} delivery` : ''}
                         </option>
                       ))}
                     </select>
@@ -1103,6 +1151,7 @@ export default function CheckoutPage() {
                 {/* Summary row */}
                 <div className="mb-3">
                   <div className="small text-muted">Cart total: MK {total.toFixed(2)}</div>
+                  <div className="small text-muted">Delivery fee: {deliveryFee > 0 ? `MK ${deliveryFee.toFixed(2)}` : 'Free'}</div>
                   <div className="small text-success">Already reserved/covered (this cart): MK {coveredFromUserPayments.toFixed(2)}</div>
                   <div className="h5">Remaining to pay: {remaining <= 0 ? <span className="text-success">None</span> : `MK ${remaining.toFixed(2)}`}</div>
                 </div>
