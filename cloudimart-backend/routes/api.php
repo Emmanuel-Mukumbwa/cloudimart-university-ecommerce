@@ -125,6 +125,12 @@ Route::prefix('admin')->group(function () {
     
 Route::get('/summary', [AdminController::class, 'summary']);
 
+Route::get('/locations', [AdminController::class, 'locations']);
+Route::get('/locations/{id}', [AdminController::class, 'showLocation']);
+Route::post('/locations', [AdminController::class, 'createLocation']);
+Route::put('/locations/{id}', [AdminController::class, 'updateLocation']);
+Route::delete('/locations/{id}', [AdminController::class, 'deleteLocation']);
+
 });
 });
 
