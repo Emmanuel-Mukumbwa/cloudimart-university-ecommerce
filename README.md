@@ -88,4 +88,4 @@ database/migrations/ — schema including locations migration and polygon storag
 
 Docs & utilities
 
-docs/ — (if present) API reference, architecture notes, ERD and sequence diagrams.
+docs/ — architecture notes, ERD, Usecase Diagram, Activity Diagram and sequence diagrams.
