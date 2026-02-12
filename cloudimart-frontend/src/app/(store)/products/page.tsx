@@ -149,7 +149,7 @@ export default function ProductsPage() {
               Next
             </button>
           </div>
-        )}
+        )} 
       </div>
     </div>
   ); 

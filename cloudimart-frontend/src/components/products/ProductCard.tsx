@@ -296,6 +296,6 @@ export default function ProductCard({ product }: { product: any }) {
         okLabel="View cart"
         cancelLabel="Continue shopping"
       />
-    </>
+    </> 
   );
 }

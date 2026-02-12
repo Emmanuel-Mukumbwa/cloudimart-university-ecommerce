@@ -11,7 +11,7 @@ This top-level README explains the project, lists the major components, and poin
 
 ## Goals Covered
 
-This prototype implements the interview requirements at a prototype level:
+This prototype implements the interview requirements at a prototype level: 
 
 1. Product Listing, Categorisation and Shopping Cart
    - Products are organised into categories such as Stationery and Dairy.
@@ -32,8 +32,6 @@ This prototype implements the interview requirements at a prototype level:
 2. Read the frontend README: `cloudimart-frontend/README.md` to run the Next.js frontend locally and connect it to the backend.
 
 ## Notes & Assumptions
-
-- The prototype purposefully keeps SMS/email delivery simple — the code includes hooks and configuration points to integrate third-party providers (Twilio, Mailgun, etc.).
 - The Mzuzu-community location list is configurable in the backend; the README explains where to edit it.
 
 ## Next steps / Improvements
