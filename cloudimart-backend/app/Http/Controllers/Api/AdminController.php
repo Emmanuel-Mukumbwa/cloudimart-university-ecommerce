@@ -24,6 +24,7 @@ use Illuminate\Support\Str;
 use Exception;
 use Illuminate\Support\Facades\Mail;
 use App\Mail\OrderPlaced;
+use App\Mail\DeliveryAssigned;
 
 class AdminController extends Controller
 {
@@ -472,12 +473,12 @@ public function assignDelivery(Request $request, $id)
 
     // send email to delivery person (non-blocking; fallback to sync in dev)
     try {
-        $orderForEmail = $delivery->order ?? null;
+        $orderForEmail = $delivery->order ?? Order::with('items.product','user')->find($delivery->order_id ?? null);
         if ($deliveryPerson && !empty($deliveryPerson->email) && $orderForEmail) {
             if (config('queue.default') === 'sync') {
-                Mail::to($deliveryPerson->email)->send(new OrderPlaced($orderForEmail));
+                Mail::to($deliveryPerson->email)->send(new DeliveryAssigned($orderForEmail, $delivery, $deliveryPerson));
             } else {
-                Mail::to($deliveryPerson->email)->queue(new OrderPlaced($orderForEmail));
+                Mail::to($deliveryPerson->email)->queue(new DeliveryAssigned($orderForEmail, $delivery, $deliveryPerson));
             }
         }
     } catch (\Throwable $mailEx) {
