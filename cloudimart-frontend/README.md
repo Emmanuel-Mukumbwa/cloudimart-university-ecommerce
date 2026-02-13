@@ -5,7 +5,7 @@ This folder contains the Next.js frontend for the Cloudimart prototype. It provi
 ## Prerequisites
 
 - Node.js (16+ recommended) and npm (or yarn)
- 
+
 ## Setup (Windows PowerShell)
 
 1. From project frontend folder run:

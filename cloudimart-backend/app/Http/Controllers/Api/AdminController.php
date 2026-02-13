@@ -22,6 +22,9 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Str;
 use Exception;
+use Illuminate\Support\Facades\Mail;
+use App\Mail\OrderPlaced;
+
 
 class AdminController extends Controller
 {
@@ -583,6 +586,13 @@ public function completeDelivery(Request $request, $id)
                     $payment->save();
                 }
                 DB::commit();
+                try {
+                    if ($user && $user->email) {
+                        Mail::to($user->email)->queue(new OrderPlaced($order));
+                    }
+                } catch (\Throwable $mailEx) {
+                    Log::warning('Failed to queue order email after admin approve for order ' . ($order->id ?? 'n/a') . ': ' . $mailEx->getMessage());
+                }
                 return response()->json(['message' => 'Payment approved; existing order found', 'order' => $existing], 200);
             }
 

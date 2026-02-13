@@ -66,26 +66,26 @@ This prototype implements the interview requirements at a prototype level:
 
 For detailed instructions see the READMEs in `cloudimart-backend/` and `cloudimart-frontend/`.
 
-Where to look in the code
+## Where to look in the code
 
-Frontend
+1. Frontend
 
-src/app/(store)/checkout/page.tsx — primary checkout flow and client-side location validation.
+   - src/app/(store)/checkout/page.tsx — primary checkout flow and client-side location validation.
 
-src/app/(admin)/admin/locations/page.tsx — admin UI for locations (list/create/edit/toggle/delete).
+   - src/app/(admin)/admin/locations/page.tsx — admin UI for locations (list/create/edit/toggle/delete).
 
-src/components/common/Header.tsx, src/components/common/AdminTabs.tsx — role-aware header and admin navigation.
+   - src/components/common/Header.tsx, src/components/common/AdminTabs.tsx — role-aware header and admin navigation.
 
-Backend
+2. Backend
 
-app/Http/Controllers/Api/AdminController.php — admin endpoints (payments, locations, users, orders).
+   - app/Http/Controllers/Api/AdminController.php — admin endpoints (payments, locations, users, orders).
 
-app/Services/LocationService.php — location validation logic used by checkout.
+   - app/Services/LocationService.php — location validation logic used by checkout.
 
-app/Traits/GeneratesOrderId.php — order id generation logic.
+   - app/Traits/GeneratesOrderId.php — order id generation logic.
 
-database/migrations/ — schema including locations migration and polygon storage.
+   - database/migrations/ — schema including locations migration and polygon storage.
 
 Docs & utilities
 
-docs/ — architecture notes, ERD, Usecase Diagram, Activity Diagram and sequence diagrams.
+docs/ — ERD, Usecase Diagram, Activity Diagram and sequence diagrams.

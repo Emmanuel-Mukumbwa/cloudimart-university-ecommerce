@@ -16,6 +16,10 @@ use App\Models\Payment;
 use App\Models\Notification;
 use Illuminate\Support\Facades\Log;
 
+// Added for email dispatch
+use Illuminate\Support\Facades\Mail;
+use App\Mail\OrderPlaced;
+
 class CheckoutController extends Controller
 {
     protected $locationService;
@@ -247,6 +251,23 @@ class CheckoutController extends Controller
             }
 
             DB::commit();
+
+            // -----------------------------
+            // Send confirmation email (non-blocking)
+            // -----------------------------
+            try {
+                if ($user && !empty($user->email)) {
+                    // If queue is configured as 'sync' in config/queue.php, send immediately for dev convenience
+                    if (config('queue.default') === 'sync') {
+                        Mail::to($user->email)->send(new OrderPlaced($order));
+                    } else {
+                        Mail::to($user->email)->queue(new OrderPlaced($order));
+                    }
+                }
+            } catch (\Throwable $mailEx) {
+                // Don't fail order because of email problems — just log for ops.
+                Log::warning('Failed to queue/send order email for order ' . ($order->id ?? '(unknown)') . ': ' . $mailEx->getMessage());
+            }
 
             return response()->json(['success' => true, 'order_id' => $order->order_id, 'order' => $order]);
         } catch (\Throwable $e) {

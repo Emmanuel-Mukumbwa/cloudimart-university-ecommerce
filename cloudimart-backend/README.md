@@ -42,7 +42,7 @@ The server will run by default at http://127.0.0.1:8000.
 - `app/Models/` — Eloquent models (Product, Category, Order, OrderItem, Cart, CartItem, User)
 - `app/Services/LocationService.php` — location validation logic used during checkout
 - `app/Traits/GeneratesOrderId.php` — trait used to create unique Order IDs on order creation
-- `routes/api.php` — API routes (product listing, cart, checkout, payment, orders)
+- `routes/api.php` — API routes (product listing, cart, checkout, orders)
 - `database/migrations/` — migration files to create database schema
 
 ## Configured Local Delivery Locations
@@ -138,7 +138,7 @@ We would like to extend our thanks to the following sponsors for funding Laravel
 - **[Redberry](https://redberry.international/laravel-development)**
 - **[Active Logic](https://activelogic.com)**
 
-## Contributing 
+## Contributing
 
 Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
 
