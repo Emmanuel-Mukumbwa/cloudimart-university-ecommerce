@@ -25,7 +25,6 @@ use Exception;
 use Illuminate\Support\Facades\Mail;
 use App\Mail\OrderPlaced;
 
-
 class AdminController extends Controller
 {
     /**
@@ -471,6 +470,20 @@ public function assignDelivery(Request $request, $id)
         'message' => "Your order #{$delivery->order->order_id} has been assigned to {$deliveryPerson->name}.",
     ]);
 
+    // send email to delivery person (non-blocking; fallback to sync in dev)
+    try {
+        $orderForEmail = $delivery->order ?? null;
+        if ($deliveryPerson && !empty($deliveryPerson->email) && $orderForEmail) {
+            if (config('queue.default') === 'sync') {
+                Mail::to($deliveryPerson->email)->send(new OrderPlaced($orderForEmail));
+            } else {
+                Mail::to($deliveryPerson->email)->queue(new OrderPlaced($orderForEmail));
+            }
+        }
+    } catch (\Throwable $mailEx) {
+        Log::warning('Failed to queue/send delivery assignment email to user id ' . ($deliveryPerson->id ?? 'n/a') . ': ' . $mailEx->getMessage());
+    }
+
     return response()->json(['success' => true, 'delivery' => $delivery->load('deliveryPerson')], 200);
 }
 
@@ -586,13 +599,20 @@ public function completeDelivery(Request $request, $id)
                     $payment->save();
                 }
                 DB::commit();
+
+                // queue/send email to customer for the existing order (non-blocking)
                 try {
-                    if ($user && $user->email) {
-                        Mail::to($user->email)->queue(new OrderPlaced($order));
+                    if ($user && !empty($user->email)) {
+                        if (config('queue.default') === 'sync') {
+                            Mail::to($user->email)->send(new OrderPlaced($existing));
+                        } else {
+                            Mail::to($user->email)->queue(new OrderPlaced($existing));
+                        }
                     }
                 } catch (\Throwable $mailEx) {
-                    Log::warning('Failed to queue order email after admin approve for order ' . ($order->id ?? 'n/a') . ': ' . $mailEx->getMessage());
+                    Log::warning('Failed to queue/send order email after admin approve for existing order ' . ($existing->id ?? 'n/a') . ': ' . $mailEx->getMessage());
                 }
+
                 return response()->json(['message' => 'Payment approved; existing order found', 'order' => $existing], 200);
             }
 
@@ -728,6 +748,19 @@ public function completeDelivery(Request $request, $id)
 
                 DB::commit();
 
+                // queue/send email to customer for the newly created order (non-blocking)
+                try {
+                    if ($user && !empty($user->email)) {
+                        if (config('queue.default') === 'sync') {
+                            Mail::to($user->email)->send(new OrderPlaced($order));
+                        } else {
+                            Mail::to($user->email)->queue(new OrderPlaced($order));
+                        }
+                    }
+                } catch (\Throwable $mailEx) {
+                    Log::warning('Failed to queue/send order email after admin approve (snapshot) for order ' . ($order->id ?? 'n/a') . ': ' . $mailEx->getMessage());
+                }
+
                 return response()->json(['message' => 'Payment approved and order created', 'order' => $order, 'payment' => $this->paymentToArray($payment)], 200);
             }
 
@@ -837,6 +870,19 @@ public function completeDelivery(Request $request, $id)
             $payment->save();
 
             DB::commit();
+
+            // queue/send email to customer for the newly created order (non-blocking)
+            try {
+                if ($user && !empty($user->email)) {
+                    if (config('queue.default') === 'sync') {
+                        Mail::to($user->email)->send(new OrderPlaced($order));
+                    } else {
+                        Mail::to($user->email)->queue(new OrderPlaced($order));
+                    }
+                }
+            } catch (\Throwable $mailEx) {
+                Log::warning('Failed to queue/send order email after admin approve (cart fallback) for order ' . ($order->id ?? 'n/a') . ': ' . $mailEx->getMessage());
+            }
 
             return response()->json(['message' => 'Payment approved and order created', 'order' => $order, 'payment' => $this->paymentToArray($payment)], 200);
         } catch (Exception $e) {
@@ -1170,4 +1216,4 @@ public function summary(Request $request)
     }
 }
 
-} 
+}
