@@ -448,43 +448,73 @@ public function assignDelivery(Request $request, $id)
         return response()->json(['message' => 'Selected user is not an active delivery person'], 422);
     }
 
-    // attach
+    // attach person (critical DB save happens first)
     $delivery->delivery_person_id = $deliveryPerson->id;
-    // keep legacy text field for display
     $delivery->delivery_person = $deliveryPerson->name;
-    // optional: mark as assigned (if you made status string)
+
+    // keep existing behaviour for status to avoid breaking other code
     if (in_array($delivery->status, ['pending'])) {
-        $delivery->status = 'pending'; // or 'assigned' if you support it
+        $delivery->status = 'pending';
     }
+
+    // Save immediately — if this fails Laravel will return an error and nothing else runs
     $delivery->save();
 
-    // notify delivery person and order user
-    Notification::create([
-        'user_id' => $deliveryPerson->id,
-        'title' => 'New Delivery Assigned',
-        'message' => "You have been assigned delivery for order #{$delivery->order->order_id}.",
-    ]);
+    // Defensive: load order with relations if available (for notifications / email content)
+    $order = $delivery->order ?? Order::with('items.product','user')->find($delivery->order_id ?? null);
 
-    Notification::create([
-        'user_id' => $delivery->order->user_id,
-        'title' => 'Delivery Assigned',
-        'message' => "Your order #{$delivery->order->order_id} has been assigned to {$deliveryPerson->name}.",
-    ]);
-
-    // send email to delivery person (non-blocking; fallback to sync in dev)
+    // Create in-app notifications (do not allow notification failures to break the response)
     try {
-        $orderForEmail = $delivery->order ?? Order::with('items.product','user')->find($delivery->order_id ?? null);
-        if ($deliveryPerson && !empty($deliveryPerson->email) && $orderForEmail) {
-            if (config('queue.default') === 'sync') {
-                Mail::to($deliveryPerson->email)->send(new DeliveryAssigned($orderForEmail, $delivery, $deliveryPerson));
+        // Notify delivery person (in-app)
+        Notification::create([
+            'user_id' => $deliveryPerson->id,
+            'title' => 'New Delivery Assigned',
+            'message' => 'You have been assigned delivery for order #' . ($order->order_id ?? $delivery->order_id ?? 'N/A'),
+        ]);
+
+        // Notify customer (in-app) if order user exists
+        $customerId = $order->user_id ?? ($delivery->order->user_id ?? null);
+        if ($customerId) {
+            Notification::create([
+                'user_id' => $customerId,
+                'title' => 'Delivery Assigned',
+                'message' => 'Your order #' . ($order->order_id ?? $delivery->order_id ?? 'N/A') . ' has been assigned to ' . $deliveryPerson->name . '.',
+            ]);
+        }
+    } catch (\Throwable $notifyEx) {
+        Log::warning('Failed to create in-app notifications for delivery assign: ' . $notifyEx->getMessage());
+    }
+
+    // Send email to delivery person (non-blocking). IMPORTANT: when queue driver is "sync" we will NOT attempt an SMTP send.
+    try {
+        // Build the mailable (ensure class exists: App\Mail\DeliveryAssigned)
+        $mailable = new \App\Mail\DeliveryAssigned($order, $delivery, $deliveryPerson);
+
+        if ($deliveryPerson && !empty($deliveryPerson->email)) {
+            if (config('queue.default') !== 'sync') {
+                // Normal path: queue the mail
+                Mail::to($deliveryPerson->email)->queue($mailable);
             } else {
-                Mail::to($deliveryPerson->email)->queue(new DeliveryAssigned($orderForEmail, $delivery, $deliveryPerson));
+                // Dev/local sync mode: avoid SMTP (which can throw). Render and log the email content instead.
+                try {
+                    // render() will produce the HTML body (may throw if view missing — catch below)
+                    $rendered = method_exists($mailable, 'render') ? $mailable->render() : null;
+                    Log::info('DeliveryAssigned email suppressed in sync mode', [
+                        'to' => $deliveryPerson->email,
+                        'subject' => (property_exists($mailable, 'subject') ? $mailable->subject : null),
+                        'rendered_html_preview' => $rendered ? substr($rendered, 0, 2000) : null,
+                    ]);
+                } catch (\Throwable $renderEx) {
+                    Log::warning('Failed to render DeliveryAssigned mailable for logging: ' . $renderEx->getMessage());
+                }
             }
         }
     } catch (\Throwable $mailEx) {
+        // Always catch and log; do not rethrow — email is best-effort
         Log::warning('Failed to queue/send delivery assignment email to user id ' . ($deliveryPerson->id ?? 'n/a') . ': ' . $mailEx->getMessage());
     }
 
+    // Return success and the delivery (include deliveryPerson relationship)
     return response()->json(['success' => true, 'delivery' => $delivery->load('deliveryPerson')], 200);
 }
 
@@ -1066,7 +1096,7 @@ public function rejectPayment(Request $request, $id)
             'radius_km' => 'nullable|numeric',
             'delivery_fee' => 'nullable|numeric',
             'description' => 'nullable|string',
-            'address' => 'nullable|string|max:255',
+            'address' => 'nullable|string|max:255', 
             'is_active' => 'nullable|boolean',
             'polygon_coordinates' => ['nullable'], // accept json string or array; validate below
         ]);
