@@ -1,4 +1,3 @@
-// src/app/(store)/checkout/page.tsx
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
@@ -52,6 +51,9 @@ export default function CheckoutPage() {
   const [paymentTxRef, setPaymentTxRef] = useState<string | null>(null);
   const [paymentStatus, setPaymentStatus] = useState<'idle' | 'pending' | 'success' | 'failed'>('idle');
   const pollingRef = useRef<number | null>(null);
+
+  // Modal navigation-on-close flag: when true, closing success modal navigates to /orders
+  const [modalNavigateToOrders, setModalNavigateToOrders] = useState(false);
 
   // Payment modal & loading
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -590,6 +592,9 @@ export default function CheckoutPage() {
         if (status === 'success') {
           setPaymentStatus('success');
 
+          // ensure modal will navigate to orders when closed
+          setModalNavigateToOrders(true);
+
           // refresh payments/reservations so UI recalculates remainingToPay
           await fetchUserPayments(cartHash);
           await fetchAllNonOrderedPayments();
@@ -882,11 +887,22 @@ export default function CheckoutPage() {
   };
 
   const handleCloseModal = () => {
+    // If the modal was opened because payment succeeded, navigate to orders
+    if (modalNavigateToOrders) {
+      // reset the flag and close modal, then navigate
+      setModal({ show: false });
+      setModalNavigateToOrders(false);
+      router.push('/orders');
+      return;
+    }
+
+    // existing behavior: if order placed we also navigate
     if (modal.title === 'Order placed') {
       setModal({ show: false });
       router.push('/orders');
       return;
     }
+
     setModal({ show: false });
   };
 
