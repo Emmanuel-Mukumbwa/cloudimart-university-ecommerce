@@ -76,28 +76,14 @@ export default function ProductCard({ product }: { product: any }) {
     return () => { mounted = false; };
   }, []);
 
+  // Updated handleAdd: don't rely on localStorage existence; wait for pending check; handle 401/409
   const handleAdd = async () => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-    if (!token) {
-      setShowLoginModal(true);
-      return;
-    }
+    // If pending check still running, don't attempt yet — button is disabled while checkingPending,
+    // but defend against accidental calls by returning early.
+    if (checkingPending) return;
 
-    if (checkingPending) {
-      // still verifying — be defensive
-      setShowAddedModal(false);
-      setShowLoginModal(false);
-      setShowViewModal(false);
-      setAdding(false);
-      setShowLoginModal(true); // we reuse login modal as a simple blocker here
-      return;
-    }
-
+    // If server previously indicated a pending payment, show modal
     if (hasPending) {
-      // show a friendly modal informing the user they must resolve pending payment
-      setShowAddedModal(false);
-      setShowLoginModal(false);
-      setShowViewModal(false);
       setShowPendingModal();
       return;
     }
@@ -107,15 +93,22 @@ export default function ProductCard({ product }: { product: any }) {
       await addToCart(product.id, 1);
       setShowAddedModal(true);
     } catch (err: any) {
-      // if addToCart fails with 409 from server guard, show friendly message
       const status = err?.response?.status ?? null;
-      if (status === 409) {
+      if (status === 401) {
+        // Unauthorized — token likely expired/invalid. Clear local token and prompt login.
+        if (typeof window !== 'undefined') {
+          try { localStorage.removeItem('auth_token'); } catch (e) {}
+        }
+        setShowLoginModal(true);
+      } else if (status === 409) {
+        // Server-side guard: pending payment exists
         const pendingHashServer = err?.response?.data?.pending_cart_hash ?? null;
         setPendingHash(pendingHashServer ?? pendingHash);
         setHasPending(true);
         setShowPendingModal();
       } else {
-        // fallback: prompt login if unauthorized
+        console.error('Add to cart failed', err);
+        // fallback: prompt login (catch-all)
         setShowLoginModal(true);
       }
     } finally {
@@ -123,28 +116,21 @@ export default function ProductCard({ product }: { product: any }) {
     }
   };
 
-  // small helper to show a pending-payment modal
+  // small helper to show a pending-payment modal (re-uses login modal UI)
   const setShowPendingModal = () => {
     setShowLoginModal(false);
     setShowAddedModal(false);
     setShowViewModal(false);
-    // use login modal component to show a message but with different title/body
+    // reuse login modal to show pending-payment message
     setShowLoginModal(true);
   };
 
   const openView = () => setShowViewModal(true);
 
+  // Updated handleViewAdd: same behavior as handleAdd but closes view modal on 401 so login modal can show
   const handleViewAdd = async () => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-    if (!token) {
-      setShowViewModal(false);
-      setShowLoginModal(true);
-      return;
-    }
-
     if (checkingPending) {
-      setShowViewModal(false);
-      setShowLoginModal(true);
+      // still verifying pending payments — do nothing (button should be disabled)
       return;
     }
 
@@ -161,12 +147,20 @@ export default function ProductCard({ product }: { product: any }) {
       setShowAddedModal(true);
     } catch (err: any) {
       const status = err?.response?.status ?? null;
-      if (status === 409) {
+      if (status === 401) {
+        // Unauthorized
+        if (typeof window !== 'undefined') {
+          try { localStorage.removeItem('auth_token'); } catch (e) {}
+        }
+        setShowViewModal(false);
+        setShowLoginModal(true);
+      } else if (status === 409) {
         const pendingHashServer = err?.response?.data?.pending_cart_hash ?? null;
         setPendingHash(pendingHashServer ?? pendingHash);
         setHasPending(true);
         setShowPendingModal();
       } else {
+        setShowViewModal(false);
         setShowLoginModal(true);
       }
     } finally {
@@ -203,7 +197,7 @@ export default function ProductCard({ product }: { product: any }) {
           <button
             className="btn-add btn btn-primary btn-sm"
             onClick={handleAdd}
-            disabled={adding || (product.stock ?? 0) <= 0 || hasPending}
+            disabled={adding || (product.stock ?? 0) <= 0 || hasPending || checkingPending}
             title={hasPending ? `You have a pending payment${pendingHash ? ` (${pendingHash})` : ''}. Resolve before adding.` : undefined}
           >
             {product.stock <= 0 ? 'Out of stock' : hasPending ? 'Pending payment' : adding ? 'Adding...' : 'Add To Cart'}
@@ -296,6 +290,6 @@ export default function ProductCard({ product }: { product: any }) {
         okLabel="View cart"
         cancelLabel="Continue shopping"
       />
-    </> 
+    </>
   );
 }
