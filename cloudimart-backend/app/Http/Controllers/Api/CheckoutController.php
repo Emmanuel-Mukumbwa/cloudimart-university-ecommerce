@@ -213,7 +213,7 @@ class CheckoutController extends Controller
                 'delivery_person' => null,
                 'status' => 'pending',
                 'verification_code' => $verificationCode
-            ]);
+            ]); 
 
             // 5) clear cart items
             $cart->items()->delete();
