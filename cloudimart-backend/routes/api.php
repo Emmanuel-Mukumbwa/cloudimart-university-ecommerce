@@ -15,6 +15,7 @@ use App\Http\Controllers\Api\OrdersController;
 use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\AdminController;
+use App\Http\Controllers\Api\SiteTermsController;
 
 /*
 |--------------------------------------------------------------------------
@@ -46,6 +47,7 @@ Route::get('/categories', [CategoryController::class, 'index']);
 Route::get('/products', [ProductController::class, 'index']);
 Route::get('/products/{id}', [ProductController::class, 'show']);
 
+Route::get('/public/terms', [SiteTermsController::class, 'publicLatest']);
 // Public webhook (PayChangu callback)
 /// Route::post('/payment/callback', [PaymentController::class, 'callback'])->name('payment.callback');
 
@@ -130,6 +132,11 @@ Route::get('/locations/{id}', [AdminController::class, 'showLocation']);
 Route::post('/locations', [AdminController::class, 'createLocation']);
 Route::put('/locations/{id}', [AdminController::class, 'updateLocation']);
 Route::delete('/locations/{id}', [AdminController::class, 'deleteLocation']);
+
+Route::get('/terms', [SiteTermsController::class, 'index']);
+    Route::get('/terms/latest', [SiteTermsController::class, 'publicLatest']);
+    Route::post('/terms', [SiteTermsController::class, 'store']);
+    Route::put('/terms/{id}', [SiteTermsController::class, 'update']);
 
 });
 });
