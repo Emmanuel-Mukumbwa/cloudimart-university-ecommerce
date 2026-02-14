@@ -1,6 +1,6 @@
 # Cloudimart API — Reference (Authoritative)
 
-This reference is generated directly from the implemented route declarations and controller code in `cloudimart-backend`. It documents the API endpoints, HTTP methods, authentication requirements, validation rules, and typical request/response shapes that are actually implemented by the current codebase — not assumptions.
+This reference is about the implemented route declarations and controller code in `cloudimart-backend`. It documents the API endpoints, HTTP methods, authentication requirements, validation rules, and typical request/response shapes that are actually implemented by the current codebase — not assumptions.
 
 Use this file as the primary source of truth when integrating the frontend, writing tests, or building third‑party clients. If you discover a mismatch between runtime behavior and this documentation, please open an issue and include the failing request and the related controller (see `cloudimart-backend/routes/api.php` and `app/Http/Controllers/Api`).
 
