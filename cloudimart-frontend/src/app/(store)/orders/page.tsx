@@ -1,4 +1,3 @@
-//src/app/(store)/orders/page.tsx
 'use client';
 
 import React, { useEffect, useState } from 'react';
@@ -13,6 +12,8 @@ type Order = {
   delivery_address: string;
   created_at: string;
   delivery_display?: string | null; // server-provided friendly string
+  delivery_fee?: number | null;
+  total_with_delivery?: number | null;
   // old shape may include nested delivery object; we don't render it directly
   delivery?: any;
 };
@@ -58,7 +59,21 @@ export default function OrdersPage() {
       const res = await client.get('/api/orders');
       const payload = res.data;
       const list = Array.isArray(payload?.data) ? payload.data : (Array.isArray(payload) ? payload : []);
-      setOrders(list);
+
+      // Defensive normalization: ensure numeric fields exist and compute grand total
+      const normalized = list.map((o: any) => {
+        const delivery_fee = o.delivery_fee !== undefined && o.delivery_fee !== null ? Number(o.delivery_fee) : 0.0;
+        const total = o.total !== undefined && o.total !== null ? Number(o.total) : 0.0;
+        const total_with_delivery = Number((total + delivery_fee).toFixed(2));
+        return {
+          ...o,
+          delivery_fee,
+          total: Number(total.toFixed ? total.toFixed(2) : total),
+          total_with_delivery,
+        };
+      });
+
+      setOrders(normalized);
     } catch (e: any) {
       setError(e?.response?.data?.message ?? e?.message ?? 'Failed to load orders');
       setOrders([]);
@@ -123,6 +138,8 @@ export default function OrdersPage() {
                 <th>Order #</th>
                 <th>Status</th>
                 <th>Total (MK)</th>
+                <th>Delivery Fee (MK)</th>
+                <th>Grand Total (MK)</th>
                 <th>Delivery Address</th>
                 <th>Delivery</th>
                 <th>Date</th>
@@ -131,16 +148,18 @@ export default function OrdersPage() {
             <tbody>
               {orders.map((o) => (
                 <tr key={o.id}>
-                  <td>{o.order_id}</td>
+                  <td>{o.order_id ?? `#${o.id}`}</td>
                   <td>
                     <span className={`badge ${statusBadgeClass(o.status)}`}>
                       {statusLabel(o.status)}
                     </span>
                   </td>
-                  <td>{Number(o.total).toFixed(2)}</td>
-                  <td>{o.delivery_address}</td>
+                  <td>{Number(o.total ?? 0).toFixed(2)}</td>
+                  <td>{Number(o.delivery_fee ?? 0).toFixed(2)}</td>
+                  <td>{Number(o.total_with_delivery ?? (Number(o.total ?? 0) + Number(o.delivery_fee ?? 0))).toFixed(2)}</td>
+                  <td>{o.delivery_address ?? '-'}</td>
                   <td>{deliveryFallback(o)}</td>
-                  <td>{new Date(o.created_at).toLocaleString()}</td>
+                  <td>{o.created_at ? new Date(o.created_at).toLocaleString() : '-'}</td>
                 </tr>
               ))}
             </tbody>
