@@ -5,11 +5,11 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import client from '../../lib/api/client';
-
+ 
 type Tab = {
   href: string;
   label: string;
-  variant?: string; // optional for styling (bootstrap class suffix)
+  variant?: string; 
 };
 
 const DEFAULT_TABS: Tab[] = [
@@ -20,6 +20,7 @@ const DEFAULT_TABS: Tab[] = [
   { href: '/admin/payments', label: 'Payments', variant: 'outline-info' },
   { href: '/admin/notifications', label: 'Notifications', variant: 'outline-warning' },
   { href: '/admin/locations', label: 'Locations', variant: 'outline-dark' },
+  { href: '/admin/terms', label: 'Terms', variant: 'outline-secondary' }, 
 ];
 
 export default function AdminTabs({ tabs = DEFAULT_TABS }: { tabs?: Tab[] }) {
