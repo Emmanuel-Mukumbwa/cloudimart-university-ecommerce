@@ -356,3 +356,13 @@ input:focus, select:focus {
 .site-footer .small {
   color: var(--muted);
 }
+
+/* Slightly reduce default top spacing for hero/featured transitions */
+#products {
+  scroll-margin-top: 70px; /* ensures scroll lands nicely below header (adjust if header height differs) */
+}
+
+/* Small helper in case FeaturedProducts has a top margin */
+.featured-products-top-tight {
+  margin-top: 0.5rem !important;
+}
