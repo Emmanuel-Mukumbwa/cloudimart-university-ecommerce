@@ -17,12 +17,12 @@ export default function Hero() {
   };
 
   return (
-    <section className="bg-light py-5">
-      <div className="container py-lg-5">
+    <section className="bg-light py-3">
+      <div className="container py-lg-4">
         <div className="row align-items-center">
           {/* LEFT */}
           <div className="col-lg-6 text-center text-lg-start">
-            <span className="badge bg-primary-subtle mb-3" style={{ color: 'var(--brand-darkBlue)' }}>
+            <span className="badge bg-primary-subtle mb-2" style={{ color: 'var(--brand-darkBlue)' }}>
               Cloudimart · Mzuzu University Community
             </span>
 
@@ -31,13 +31,13 @@ export default function Hero() {
               <span style={{ color: 'var(--brand-darkBlue)' }}>entire community</span>
             </h1>
 
-            <p className="lead text-secondary mb-4">
-              From students and faculty to staff and nearby residents, Cloudimart delivers
-              stationery, dairy, and daily essentials right to your doorstep around Mzuzu
-              University — fast, affordable, and reliable.
+            <p className="lead text-secondary mb-3">
+              Whether you're a student, lecturer, staff member, or nearby resident, Cloudimart brings
+              stationery, dairy, and everyday essentials right to your door; anywhere in the Mzuzu
+              University community. No trips to town. No delays. Just convenience.
             </p>
 
-            <div className="d-flex flex-wrap gap-3 justify-content-center justify-content-lg-start">
+            <div className="d-flex flex-wrap gap-2 justify-content-center justify-content-lg-start">
               <Link href="/products" className="btn btn-lg btn-warning text-white fw-semibold shadow-sm">
                 Shop Now
               </Link>
@@ -53,15 +53,15 @@ export default function Hero() {
               </a>
             </div>
 
-            <ul className="list-inline mt-4 small text-secondary">
+            <ul className="list-inline mt-3 small text-secondary">
               <li className="list-inline-item me-3">✅ Affordable local pricing</li>
-              <li className="list-inline-item me-3">🚚 Quick campus delivery</li>
+              <li className="list-inline-item me-3">🚚 Quick delivery</li>
               <li className="list-inline-item">🔒 Secure checkout</li>
             </ul>
           </div>
 
           {/* RIGHT */}
-          <div className="col-lg-6 text-center mt-5 mt-lg-0">
+          <div className="col-lg-6 text-center mt-3 mt-lg-0">
             <div className="position-relative d-inline-block" style={{ maxWidth: 400 }}>
               <Image
                 src="/cloudimart.png"
@@ -73,7 +73,6 @@ export default function Hero() {
                 priority={false}
                 placeholder="empty"
                 onError={(e: any) => {
-                  // fall back to the existing svg if something goes wrong
                   const target = e?.target as HTMLImageElement | null;
                   if (target) {
                     target.onerror = null;
@@ -85,8 +84,8 @@ export default function Hero() {
               <div
                 className="position-absolute top-0 start-0 w-100 h-100 rounded-4"
                 style={{
-                  background: 'linear-gradient(135deg, rgba(37,99,235,0.1), rgba(249,115,22,0.15))',
-                  filter: 'blur(40px)',
+                  background: 'linear-gradient(135deg, rgba(37,99,235,0.1), rgba(249,115,22,0.12))',
+                  filter: 'blur(36px)',
                   zIndex: -1,
                 }}
               />
