@@ -334,3 +334,25 @@ input:focus, select:focus {
   padding: 0.75rem 0;
 }
 
+/* Footer visibility & link tweaks */
+.site-footer {
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+  border-top: 1px solid rgba(2,6,23,0.04);
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+}
+
+.site-footer a {
+  color: var(--brand-darkBlue);
+  transition: color .12s ease, text-decoration .12s ease;
+}
+
+.site-footer a:hover,
+.site-footer a:focus {
+  color: var(--brand-blue);
+  text-decoration: underline;
+}
+
+.site-footer .small {
+  color: var(--muted);
+}

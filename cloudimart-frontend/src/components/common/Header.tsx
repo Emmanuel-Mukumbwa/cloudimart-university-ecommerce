@@ -204,10 +204,10 @@ export default function Header() {
               </button>
             )}
 
-            {/* Support / link - visible to everyone */}
+            {/* Support / link - visible to everyone 
             <Link href="/support" className="text-muted small">
               Support
-            </Link>
+            </Link>*/}
           </div>
 
           <div style={{ color: 'var(--brand-darkBlue)', fontWeight: 600 }}>

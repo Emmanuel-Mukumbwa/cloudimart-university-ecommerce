@@ -14,7 +14,7 @@ client.interceptors.request.use((cfg) => {
   try {
     if (typeof window !== 'undefined') {
       const token = localStorage.getItem('auth_token');
-      if (token) {
+      if (token) { 
         // ensure headers object exists
         cfg.headers = cfg.headers ?? {};
         cfg.headers.Authorization = `Bearer ${token}`;

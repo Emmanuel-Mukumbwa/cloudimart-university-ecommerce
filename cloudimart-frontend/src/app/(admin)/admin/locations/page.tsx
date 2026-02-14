@@ -1,3 +1,4 @@
+//src/app/(admin)/admin/locations/page.tsx
 'use client';
 
 import React, { useEffect, useState } from 'react';
@@ -276,6 +277,6 @@ export default function AdminLocationsPage() {
           </div>
         </div>
       )}
-    </div>
+    </div> 
   );
 }
