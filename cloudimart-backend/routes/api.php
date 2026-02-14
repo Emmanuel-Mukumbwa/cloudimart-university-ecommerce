@@ -63,6 +63,12 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Auth
     Route::post('/auth/logout', [AuthController::class, 'logout'])->middleware('auth:sanctum');
+    // Update profile
+Route::put('/user', [\App\Http\Controllers\Api\UserAccountController::class, 'update']);
+
+// Change password
+Route::post('/user/change-password', [\App\Http\Controllers\Api\UserAccountController::class, 'changePassword']);
+
 
     // --- 🛒 Cart Management --- //
     Route::get('/cart', [CartController::class, 'index']);
