@@ -14,14 +14,6 @@ type User = {
   longitude?: number | null;
 };
 
-type Order = {
-  id: number;
-  unique_order_id?: string;
-  total?: number;
-  status?: string;
-  created_at?: string;
-};
-
 type Location = {
   id: number;
   name: string;
@@ -30,7 +22,6 @@ type Location = {
 
 export default function AccountPage() {
   const [user, setUser] = useState<User | null>(null);
-  const [orders, setOrders] = useState<Order[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingProfile, setSavingProfile] = useState(false);
@@ -50,18 +41,15 @@ export default function AccountPage() {
     setLoading(true);
     setMessage(null);
     try {
-      const [uRes, oRes, lRes] = await Promise.all([
+      const [uRes, lRes] = await Promise.all([
         client.get('/api/user'),
-        client.get('/api/orders'),
         client.get('/api/locations'),
       ]);
 
       const u = uRes.data ?? uRes.data?.user ?? null;
-      const ordersPayload = oRes.data?.data ?? oRes.data ?? [];
       const locationsPayload = lRes.data?.data ?? lRes.data ?? [];
 
       setUser(u);
-      setOrders(Array.isArray(ordersPayload) ? ordersPayload : []);
       setLocations(Array.isArray(locationsPayload) ? locationsPayload : locationsPayload?.data ?? []);
 
       setProfileForm({
@@ -135,8 +123,8 @@ export default function AccountPage() {
       {message && <div className="alert alert-info">{message}</div>}
 
       <div className="row g-4">
-        <div className="col-lg-6">
-          <div className="card p-3">
+        <div className="col-lg-8">
+          <div className="card p-3 mb-3">
             <h5 className="mb-3">Profile</h5>
             <form onSubmit={saveProfile}>
               <div className="mb-2">
@@ -172,7 +160,7 @@ export default function AccountPage() {
             </form>
           </div>
 
-          <div className="card p-3 mt-3">
+          <div className="card p-3">
             <h5 className="mb-3">Change password</h5>
 
             {pwMessage && <div className="alert alert-info">{pwMessage}</div>}
@@ -200,39 +188,11 @@ export default function AccountPage() {
           </div>
         </div>
 
-        <div className="col-lg-6">
+        <div className="col-lg-4">
           <div className="card p-3">
-            <h5 className="mb-3">Recent orders</h5>
-
-            {orders.length === 0 ? (
-              <p className="text-muted small">You have no orders yet.</p>
-            ) : (
-              <div className="list-group">
-                {orders.slice(0, 10).map((o: any) => (
-                  <div key={o.id} className="list-group-item d-flex justify-content-between align-items-center">
-                    <div>
-                      <div className="fw-bold">{o.unique_order_id ?? `#${o.id}`}</div>
-                      <div className="small text-muted">{new Date(o.created_at).toLocaleString()} · Status: {o.status}</div>
-                    </div>
-                    <div className="text-end">
-                      <div className="small text-muted">MK {Number(o.total ?? 0).toFixed(2)}</div>
-                      <Link href={`/orders/${o.id}`} className="btn btn-sm btn-outline-primary mt-2">View</Link>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="mt-3 text-end">
-              <Link href="/orders" className="btn btn-sm btn-outline-secondary">All orders</Link>
-            </div>
-          </div>
-
-          <div className="card p-3 mt-3">
             <h5 className="mb-3">Account actions</h5>
             <div className="d-flex gap-2">
               <Link href="/auth/logout" className="btn btn-danger">Log out</Link>
-              <Link href="/support" className="btn btn-outline-secondary">Contact support</Link>
             </div>
           </div>
         </div>
