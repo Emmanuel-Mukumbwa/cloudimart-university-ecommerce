@@ -39,8 +39,12 @@ class OrdersController extends Controller
                 }
             }
 
-            // Append a simple property (will be preserved in returned JSON)
+            // Ensure numeric/float fields are normalized for the frontend
             $order->delivery_display = $deliveryDisplay;
+            $order->delivery_fee = isset($order->delivery_fee) ? (float) $order->delivery_fee : 0.0;
+            $order->total = isset($order->total) ? (float) $order->total : 0.0;
+            $order->total_with_delivery = round($order->total + $order->delivery_fee, 2);
+
             return $order;
         });
 
