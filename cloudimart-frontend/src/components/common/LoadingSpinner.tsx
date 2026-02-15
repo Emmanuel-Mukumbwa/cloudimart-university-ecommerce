@@ -1,9 +1,18 @@
-//src/components/common/LoadingSpinner.tsx
-export default function LoadingSpinner() {
+import React from 'react';
+
+type Props = {
+  size?: 'sm' | 'md' | 'lg';
+  inline?: boolean;
+};
+
+export default function LoadingSpinner({ size = 'md', inline = false }: Props) {
+  // size -> pixel dims
+  const dims = size === 'sm' ? '1rem' : size === 'lg' ? '2.5rem' : '2rem';
+  const wrapperClass = inline ? 'd-inline-block align-middle' : 'd-flex justify-content-center align-items-center py-5';
+
   return (
-    <div className="d-flex justify-content-center align-items-center py-5" role="status">
-      <div className="spinner-border text-primary" style={{ width: '2rem', height: '2rem' }} />
+    <div className={wrapperClass} role="status" aria-live="polite" aria-busy="true">
+      <div className="spinner-border text-primary" style={{ width: dims, height: dims }} />
     </div>
   );
 }
- 
