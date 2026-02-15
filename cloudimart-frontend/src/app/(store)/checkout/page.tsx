@@ -11,6 +11,7 @@ import PaymentButtons from '../../../components/checkout/PaymentButtons';
 type Loc = {
   id: number;
   name: string;
+  slug?: string;
   latitude?: number | null;
   longitude?: number | null;
   radius_km?: number | null;
@@ -86,6 +87,10 @@ export default function CheckoutPage() {
   // Verification TTL (1 hour)
   const VERIFICATION_TTL_MS = 1000 * 60 * 60;
 
+  // Chitipa fallback config (case-insensitive slug or name match)
+  const FALLBACK_LOCATION_NAME = 'chitipa';
+  const FALLBACK_COORDS = { lat: -9.696192, lng: 33.28139 };
+
   // --- Helper: showModal (dedupe by key for a short time) ---
   const showModal = (title?: string, body?: React.ReactNode, key?: string) => {
     try {
@@ -138,6 +143,23 @@ export default function CheckoutPage() {
       autoCloseTimeoutRef.current = null;
     }
     setModal({ show: false });
+  };
+
+  // small helper to get location name by id
+  const getLocationName = (id?: number | '') => {
+    if (!id && id !== 0) return '';
+    const found = locations.find((l) => Number(l.id) === Number(id));
+    return found?.name ?? '';
+  };
+
+  // helper: is selected location "Chitipa" (slug or name)
+  const isChitipaLocation = (id?: number | '') => {
+    if (!id && id !== 0) return false;
+    const found = locations.find((l) => Number(l.id) === Number(id));
+    if (!found) return false;
+    const slug = String(found.slug ?? '').toLowerCase().trim();
+    const name = String(found.name ?? '').toLowerCase().trim();
+    return slug === FALLBACK_LOCATION_NAME || name === FALLBACK_LOCATION_NAME;
   };
 
   // --- lifecycle: initial load ---
@@ -550,15 +572,41 @@ export default function CheckoutPage() {
     }
   };
 
-  // Request GPS with options and automatic fallback
+  // Request GPS with options and conditional Chitipa fallback
+  // IMPORTANT: Fallback is used ONLY if the browser could NOT provide coordinates (permission denied, unsupported, timeout),
+  // and ONLY when selected location is Chitipa (slug/name). If browser returns coordinates, we will always validate them and
+  // will NOT attempt fallback even if server says point is outside.
   const requestGps = async () => {
     setError(null);
     setDetectedArea(null);
     setVerified(false);
     setShowFallbackChoice(false);
 
+    const chitipa = isChitipaLocation(selectedLocationId);
+    const locNameForMsg = getLocationName(selectedLocationId) || 'the selected location';
+
+    // If geolocation is not available at all
     if (!navigator.geolocation) {
-      setError('GPS is not supported on this device/browser.');
+      if (chitipa) {
+        // silent fallback: attempt validation with fallback coords (do not disclose fallback)
+        try {
+          setGps(FALLBACK_COORDS);
+          setVerifying(true);
+          await validatePointAndSet(FALLBACK_COORDS.lat, FALLBACK_COORDS.lng, selectedLocationId);
+        } finally {
+          setVerifying(false);
+        }
+        return;
+      }
+
+      // otherwise show the simple message and stop
+      showModal(
+        'Location verification',
+        <p className="small mb-2">
+          We cannot verify you're inside <strong>{locNameForMsg}</strong> please select the area you are in.
+        </p>,
+        'no_gps_support'
+      );
       return;
     }
 
@@ -570,6 +618,7 @@ export default function CheckoutPage() {
       setGps({ lat, lng });
 
       try {
+        // IMPORTANT: We do NOT fallback here. If server says outside, we show the outside message.
         await validatePointAndSet(lat, lng, selectedLocationId);
       } finally {
         setVerifying(false);
@@ -579,28 +628,30 @@ export default function CheckoutPage() {
     const errorCb = async (err: GeolocationPositionError) => {
       console.warn('Geolocation error', err);
       setVerifying(false);
-      setShowFallbackChoice(true);
 
-      switch (err.code) {
-        case err.PERMISSION_DENIED:
-          setError('Location permission denied. Falling back to your selected location (if available).');
-          break;
-        case err.POSITION_UNAVAILABLE:
-          setError('Position unavailable. Falling back to your selected location (if available).');
-          break;
-        case err.TIMEOUT:
-        default:
-          setError('GPS timeout. Falling back to your selected location (if available).');
-          break;
+      // Only fallback silently for Chitipa; otherwise show simple message and stop.
+      if (chitipa) {
+        try {
+          setGps(FALLBACK_COORDS);
+          setVerifying(true);
+          await validatePointAndSet(FALLBACK_COORDS.lat, FALLBACK_COORDS.lng, selectedLocationId);
+        } catch (e) {
+          // If fallback validation fails, show a generic validation error modal
+          showModal('Validation error', 'Location verification failed. Please try again or contact support.', 'fallback_validation_failed');
+        } finally {
+          setVerifying(false);
+        }
+        return;
       }
 
-      if (selectedLocationId) {
-        await useSelectedLocationFallback(true);
-      } else {
-        const k = 'gps_failed';
-        showModal('GPS failed', 'Unable to get GPS coordinates. Please select a fallback location from the dropdown or try again with a device that has GPS.', k);
-        autoCloseModalByKey(k, 3500);
-      }
+      // Non-Chitipa: show the small requested paragraph
+      showModal(
+        'Location verification',
+        <p className="small mb-2">
+          We cannot verify you're inside <strong>{locNameForMsg}</strong> please select the area you are in.
+        </p>,
+        'no_gps_for_location'
+      );
     };
 
     const options: PositionOptions = { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 };
@@ -610,12 +661,33 @@ export default function CheckoutPage() {
     } catch (err) {
       console.error('getCurrentPosition threw', err);
       setVerifying(false);
-      setError('Unexpected geolocation error. Please try again.');
-      setShowFallbackChoice(true);
+
+      // Only Chitipa fallback in thrown errors
+      if (chitipa) {
+        try {
+          setGps(FALLBACK_COORDS);
+          setVerifying(true);
+          await validatePointAndSet(FALLBACK_COORDS.lat, FALLBACK_COORDS.lng, selectedLocationId);
+        } catch (e) {
+          showModal('Validation error', 'Location verification failed. Please try again or contact support.', 'fallback_validation_failed2');
+        } finally {
+          setVerifying(false);
+        }
+      } else {
+        const locName = getLocationName(selectedLocationId) || 'the selected location';
+        showModal(
+          'Location verification',
+          <p className="small mb-2">
+            We cannot verify you're inside <strong>{locName}</strong> please select the area you are in.
+          </p>,
+          'no_gps_for_location2'
+        );
+      }
     }
   };
 
   // Use selected location as fallback (fetch coords if missing)
+  // autoFallback true = internal automatic attempt (suppress user-facing modals except on failure)
   const useSelectedLocationFallback = async (autoFallback = false) => {
     setError(null);
     setDetectedArea(null);
@@ -645,16 +717,20 @@ export default function CheckoutPage() {
     if (!loc) {
       setError('Selected location details are not available. Try another location or contact support.');
       const k = 'location_not_available';
-      showModal('Location not available', 'Selected location details are not available.', k);
-      autoCloseModalByKey(k, 3500);
+      if (!autoFallback) {
+        showModal('Location not available', 'Selected location details are not available.', k);
+        autoCloseModalByKey(k, 3500);
+      }
       return;
     }
 
     if (loc.latitude === undefined || loc.longitude === undefined || loc.latitude === null || loc.longitude === null) {
       setError('Selected location does not have coordinates to use as fallback.');
       const k = 'location_no_coords';
-      showModal('No coordinates', 'Selected location does not have coordinates to use as fallback.', k);
-      autoCloseModalByKey(k, 3500);
+      if (!autoFallback) {
+        showModal('No coordinates', 'Selected location does not have coordinates to use as fallback.', k);
+        autoCloseModalByKey(k, 3500);
+      }
       return;
     }
 
@@ -671,8 +747,10 @@ export default function CheckoutPage() {
       setDetectedArea(null);
       setVerified(false);
       const k = 'fallback_failed';
-      showModal('Fallback failed', err?.response?.data?.message ?? 'Fallback validation failed', k);
-      autoCloseModalByKey(k, 3500);
+      if (!autoFallback) {
+        showModal('Fallback failed', err?.response?.data?.message ?? 'Fallback validation failed', k);
+        autoCloseModalByKey(k, 3500);
+      }
     } finally {
       setVerifying(false);
       setShowFallbackChoice(false);
@@ -1309,9 +1387,7 @@ export default function CheckoutPage() {
                         </option>
                       ))}
                     </select>
-                    <div className="form-text small mt-1">
-
-                    </div>
+                    <div className="form-text small mt-1" />
                   </div>
 
                   <div className="d-flex gap-2 align-items-center">
