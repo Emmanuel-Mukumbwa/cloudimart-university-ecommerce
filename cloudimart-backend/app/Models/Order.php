@@ -13,7 +13,7 @@ class Order extends Model
     protected $fillable = [
         'order_id',
         'user_id',
-        'total', 
+        'total',  
         'delivery_address',
         'delivery_lat', 
         'delivery_lng',
@@ -51,3 +51,4 @@ class Order extends Model
         return $this->hasMany(Transaction::class);
     }
 }
+  
