@@ -17,6 +17,8 @@ class CartController extends Controller
         $user = $request->user();
         $cart = Cart::firstOrCreate(['user_id' => $user->id]);
         $items = $cart->items()->with('product')->get();
+
+        // return the cart object (including id and updated_at) plus items
         return response()->json(['success' => true, 'data' => ['cart' => $cart, 'items' => $items]]);
     }
 
@@ -99,9 +101,17 @@ class CartController extends Controller
             ]);
         }
 
+        // touch cart so cart_updated_at changes (important to disambiguate carts)
+        try {
+            $cart->touch();
+        } catch (\Throwable $e) {
+            // non-fatal; continue
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Added to cart',
+            'cart' => $cart,
             'cart_item' => [
                 'id' => $item->id,
                 'product_id' => $product->id,
@@ -124,7 +134,15 @@ class CartController extends Controller
 
         $item->quantity = $data['quantity'];
         $item->save();
-        return response()->json(['success' => true, 'message' => 'Updated', 'cart_item' => $item]);
+
+        // touch cart so cart_updated_at changes
+        try {
+            $item->cart->touch();
+        } catch (\Throwable $e) {
+            // ignore
+        }
+
+        return response()->json(['success' => true, 'message' => 'Updated', 'cart_item' => $item, 'cart' => $item->cart]);
     }
 
     /**
@@ -141,8 +159,15 @@ class CartController extends Controller
 
         if ($currentQty <= 1) {
             // delete
+            $cart = $item->cart;
             $item->delete();
-            return response()->json(['success' => true, 'message' => 'Item removed']);
+            // touch cart after delete
+            try {
+                if ($cart) $cart->touch();
+            } catch (\Throwable $e) {
+                // ignore
+            }
+            return response()->json(['success' => true, 'message' => 'Item removed', 'cart' => $cart]);
         }
 
         $newQty = $currentQty - 1;
@@ -155,15 +180,31 @@ class CartController extends Controller
         $item->quantity = $newQty;
         $item->save();
 
-        return response()->json(['success' => true, 'message' => 'Quantity decremented', 'cart_item' => $item]);
+        // touch cart
+        try {
+            $item->cart->touch();
+        } catch (\Throwable $e) {
+            // ignore
+        }
+
+        return response()->json(['success' => true, 'message' => 'Quantity decremented', 'cart_item' => $item, 'cart' => $item->cart]);
     }
 
     public function remove(Request $request, $itemId)
     {
         $item = CartItem::findOrFail($itemId);
         $this->authorizeCartItem($request->user(), $item);
+        $cart = $item->cart;
         $item->delete();
-        return response()->json(['success' => true, 'message' => 'Removed']);
+
+        // touch cart after removal
+        try {
+            if ($cart) $cart->touch();
+        } catch (\Throwable $e) {
+            // ignore
+        }
+
+        return response()->json(['success' => true, 'message' => 'Removed', 'cart' => $cart]);
     }
 
     private function authorizeCartItem($user, $item)
