@@ -47,13 +47,14 @@ export default function CheckoutPage() {
   // Modal (generic messages)
   const [modal, setModal] = useState<{ show: boolean; title?: string; body?: React.ReactNode }>({ show: false });
 
+  // Modal dedupe helper reference
+  const lastModalRef = useRef<{ key: string; ts: number } | null>(null);
+
   // Payment state & polling
   const [paymentTxRef, setPaymentTxRef] = useState<string | null>(null);
   const [paymentStatus, setPaymentStatus] = useState<'idle' | 'pending' | 'success' | 'failed'>('idle');
   const pollingRef = useRef<number | null>(null);
-
-  // Modal navigation-on-close flag: when true, closing success modal navigates to /orders
-  const [modalNavigateToOrders, setModalNavigateToOrders] = useState(false);
+  const pollingTxRef = useRef<string | null>(null);
 
   // Payment modal & loading
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -75,8 +76,33 @@ export default function CheckoutPage() {
   const [coveredAmount, setCoveredAmount] = useState<number>(0);
   const [remainingToPay, setRemainingToPay] = useState<number>(0);
 
+  // *** NEW: placingOrder state to show spinner and avoid double-submit
+  const [placingOrder, setPlacingOrder] = useState(false);
+
   // Verification TTL (1 hour)
   const VERIFICATION_TTL_MS = 1000 * 60 * 60;
+
+  // --- Helper: showModal (dedupe by key for a short time) ---
+  const showModal = (title?: string, body?: React.ReactNode, key?: string) => {
+    try {
+      const computedKey =
+        key ??
+        `${String(title ?? '')}::${typeof body === 'string' ? body : JSON.stringify(body ?? '')}`.slice(0, 200);
+      const now = Date.now();
+      if (lastModalRef.current && lastModalRef.current.key === computedKey && now - lastModalRef.current.ts < 3000) {
+        // duplicate within 3s — ignore
+        return;
+      }
+      lastModalRef.current = { key: computedKey, ts: now };
+      setModal({ show: true, title, body });
+    } catch (e) {
+      // fallback to simple set
+      setModal({ show: true, title, body });
+    }
+  };
+
+  // small helper to close modal
+  const closeModal = () => setModal({ show: false });
 
   // --- lifecycle: initial load ---
   useEffect(() => {
@@ -105,7 +131,9 @@ export default function CheckoutPage() {
       mounted = false;
       if (pollingRef.current) {
         window.clearInterval(pollingRef.current);
+        pollingRef.current = null;
       }
+      pollingTxRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -250,7 +278,7 @@ export default function CheckoutPage() {
         const snapItem = {
           product_id: Number(it.product?.id ?? it.product_id ?? 0),
           name: it.product?.name ?? it.name ?? '',
-          price: Number(it.product?.price ?? it.price ?? 0),
+          price: Number(it.product?.price ?? 0),
           quantity: Number(it.quantity ?? it.qty ?? 0),
         };
         const key = keyForSnapshotItem(snapItem);
@@ -430,27 +458,22 @@ export default function CheckoutPage() {
       }
 
       if (insideAny) {
-        setModal({
-          show: true,
-          title: 'Location verified',
-          body:
-            detected && detected.name
-              ? `You are inside: ${detected.name}\nLat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`
-              : `Location verified (inside delivery area).\nLat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`,
-        });
+        showModal(
+          'Location verified',
+          detected && detected.name
+            ? `You are inside: ${detected.name}\nLat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`
+            : `Location verified (inside delivery area).\nLat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`,
+          `location_verified_${detected?.id ?? lat}_${lng}`
+        );
       } else {
-        setModal({
-          show: true,
-          title: 'Outside delivery area',
-          body: `The coordinates you provided are outside our configured delivery zones.\nLat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`,
-        });
+        showModal('Outside delivery area', `The coordinates you provided are outside our configured delivery zones.\nLat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`, `outside_${lat}_${lng}`);
       }
     } catch (err: any) {
       console.error('Validation error', err);
       setError(err?.response?.data?.message ?? 'Validation failed');
       setDetectedArea(null);
       setVerified(false);
-      setModal({ show: true, title: 'Validation error', body: err?.response?.data?.message ?? 'Validation failed' });
+      showModal('Validation error', err?.response?.data?.message ?? 'Validation failed', 'validation_error');
     }
   };
 
@@ -501,11 +524,7 @@ export default function CheckoutPage() {
       if (selectedLocationId) {
         await useSelectedLocationFallback(true);
       } else {
-        setModal({
-          show: true,
-          title: 'GPS failed',
-          body: 'Unable to get GPS coordinates. Please select a fallback location from the dropdown or try again with a device that has GPS.',
-        });
+        showModal('GPS failed', 'Unable to get GPS coordinates. Please select a fallback location from the dropdown or try again with a device that has GPS.', 'gps_failed');
       }
     };
 
@@ -529,7 +548,7 @@ export default function CheckoutPage() {
 
     if (!selectedLocationId) {
       setError('Please select a fallback location from the dropdown.');
-      if (!autoFallback) setModal({ show: true, title: 'No location selected', body: 'Please select a fallback location.' });
+      if (!autoFallback) showModal('No location selected', 'Please select a fallback location.', 'no_location_selected');
       return;
     }
 
@@ -546,13 +565,13 @@ export default function CheckoutPage() {
 
     if (!loc) {
       setError('Selected location details are not available. Try another location or contact support.');
-      setModal({ show: true, title: 'Location not available', body: 'Selected location details are not available.' });
+      showModal('Location not available', 'Selected location details are not available.', 'location_not_available');
       return;
     }
 
     if (loc.latitude === undefined || loc.longitude === undefined || loc.latitude === null || loc.longitude === null) {
       setError('Selected location does not have coordinates to use as fallback.');
-      setModal({ show: true, title: 'No coordinates', body: 'Selected location does not have coordinates to use as fallback.' });
+      showModal('No coordinates', 'Selected location does not have coordinates to use as fallback.', 'location_no_coords');
       return;
     }
 
@@ -568,7 +587,7 @@ export default function CheckoutPage() {
       setError(err?.response?.data?.message ?? 'Fallback validation failed');
       setDetectedArea(null);
       setVerified(false);
-      setModal({ show: true, title: 'Fallback failed', body: err?.response?.data?.message ?? 'Fallback validation failed' });
+      showModal('Fallback failed', err?.response?.data?.message ?? 'Fallback validation failed', 'fallback_failed');
     } finally {
       setVerifying(false);
       setShowFallbackChoice(false);
@@ -577,7 +596,18 @@ export default function CheckoutPage() {
 
   // --- PAYMENT helpers (polling) ---
   const startPollingPaymentStatus = (txRef: string) => {
-    if (pollingRef.current) window.clearInterval(pollingRef.current);
+    // If same txRef is already being polled, do nothing.
+    if (pollingTxRef.current === txRef && pollingRef.current) {
+      return;
+    }
+
+    // clear any previous poll
+    if (pollingRef.current) {
+      window.clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+
+    pollingTxRef.current = txRef;
 
     const start = Date.now();
     const timeoutMs = 10 * 60 * 1000; // 10 minutes
@@ -590,47 +620,59 @@ export default function CheckoutPage() {
         const payment = res.data?.payment ?? null;
 
         if (status === 'success') {
+          // stop polling immediately
+          if (pollingRef.current) {
+            window.clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+          pollingTxRef.current = null;
+
           setPaymentStatus('success');
+          setPaymentTxRef(txRef);
 
-          // ensure modal will navigate to orders when closed
-          setModalNavigateToOrders(true);
+          // refresh payments/reservations once so UI updates
+          try {
+            await fetchUserPayments(cartHash);
+            await fetchAllNonOrderedPayments();
+            await loadAllPendingPayments(cartHash);
+          } catch (e) {
+            console.warn('refresh after success failed', e);
+          }
 
-          // refresh payments/reservations so UI recalculates remainingToPay
-          await fetchUserPayments(cartHash);
-          await fetchAllNonOrderedPayments();
-          await loadAllPendingPayments(cartHash);
-
-          // If server attached order_id inside payment.meta, show it
+          // If server attached order_id inside payment.meta, include it in the message but do NOT navigate
           const meta = payment?.meta ?? null;
           const orderId =
             meta?.order_id ??
             (typeof meta === 'string' ? (() => { try { return JSON.parse(meta)?.order_id ?? null; } catch { return null; } })() : null);
 
-          if (orderId) {
-            setModal({ show: true, title: 'Payment confirmed', body: `Payment confirmed and order created: ${orderId}` });
-            // refresh cart & payments (use cartHash + filters)
-            await fetchUserPayments(cartHash);
-            await fetchAllNonOrderedPayments();
-            await loadAllPendingPayments(cartHash);
-            await loadCart();
-            // stop polling
-            if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
-            return;
-          }
+          const body = orderId
+            ? `Payment confirmed and order created: ${orderId}. You can view it later or place another order.`
+            : 'Payment was successful — you can now place your order.';
 
-          // else just notify
-          setModal({ show: true, title: 'Payment confirmed', body: 'Payment confirmed. You can now place the order.' });
-          if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
+          showModal('Payment confirmed', body, `payment_confirmed_${txRef}_${orderId ?? ''}`);
+
+          // stop here
+          return;
         } else if (status === 'failed') {
+          // stop polling
+          if (pollingRef.current) {
+            window.clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+          pollingTxRef.current = null;
+
           setPaymentStatus('failed');
 
           // refresh so failed payment no longer contributes to reservedByProduct
-          await fetchUserPayments(cartHash);
-          await fetchAllNonOrderedPayments();
-          await loadAllPendingPayments(cartHash);
+          try {
+            await fetchUserPayments(cartHash);
+            await fetchAllNonOrderedPayments();
+            await loadAllPendingPayments(cartHash);
+          } catch (e) {
+            console.warn('refresh after failure failed', e);
+          }
 
-          if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
-          setModal({ show: true, title: 'Payment failed', body: 'Payment failed or was cancelled.' });
+          showModal('Payment failed', 'Payment failed or was cancelled.', `payment_failed_${txRef}`);
         } else {
           setPaymentStatus('pending');
         }
@@ -639,9 +681,13 @@ export default function CheckoutPage() {
       }
 
       if (Date.now() - start > timeoutMs) {
-        if (pollingRef.current) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
+        if (pollingRef.current) {
+          window.clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+        pollingTxRef.current = null;
         setPaymentStatus('failed');
-        setModal({ show: true, title: 'Payment timeout', body: 'Payment not confirmed within expected time. Please contact support.' });
+        showModal('Payment timeout', 'Payment not confirmed within expected time. Please contact support.', `payment_timeout_${txRef}`);
       }
     }, intervalMs);
   };
@@ -655,15 +701,15 @@ export default function CheckoutPage() {
   // Open payment options modal (main checkout button) — opens modal for the current cart snapshot
   const onOpenPaymentOptions = () => {
     if (!cartItems.length) {
-      setModal({ show: true, title: 'Cart empty', body: 'Your cart is empty.' });
+      showModal('Cart empty', 'Your cart is empty', 'cart_empty_open_payment');
       return;
     }
     if (!verified) {
-      setModal({ show: true, title: 'Not verified', body: 'Please verify your delivery location first.' });
+      showModal('Not verified', 'Please verify your delivery location first.', 'not_verified_open_payment');
       return;
     }
     if (!address || address.trim().length < 3) {
-      setModal({ show: true, title: 'Address required', body: 'Please enter a delivery address before making payment.' });
+      showModal('Address required', 'Please enter a delivery address before making payment.', 'address_required_open_payment');
       return;
     }
 
@@ -690,9 +736,37 @@ export default function CheckoutPage() {
   };
 
   // On PayChangu initiation (now includes cart_hash and location_id) — use amount from payload or modal context
+  // ---- ADD: validate mobile + network prefix before initiating
   const handleInitiatePayChangu = async (payload: { amount?: number; mobile: string; network: string; delivery_lat?: number; delivery_lng?: number; delivery_address?: string; cart_hash?: string | null; location_id?: number | null }) => {
     setPaymentLoading(true);
     try {
+      // --- Validate mobile presence & prefix for mpamba/airtel ---
+      const mobileRaw = payload.mobile ?? '';
+      const mobile = String(mobileRaw).trim();
+      const networkRaw = String((payload.network ?? '')).toLowerCase();
+
+      if (!mobile) {
+        showModal('Mobile required', 'Please enter your mobile number to continue.', 'missing_mobile_initiate');
+        throw new Error('Missing mobile number');
+      }
+
+      // simple normalization: allow leading +265 or 0; handle the common local patterns loosely
+      // But enforce prefix rules the user requested: mpamba => 08, airtel => 09
+      // We'll check the number string for starting digits after stripping + and country code.
+      const stripped = mobile.replace(/^\+/, '');
+      const withoutCountry = stripped.replace(/^265/, ''); // if user provided +265 or 265
+      const leading = withoutCountry.startsWith('0') ? withoutCountry : '0' + withoutCountry; // ensure leading 0 for check
+
+      if (networkRaw.includes('mpamba') && !leading.startsWith('08')) {
+        showModal('Invalid mpamba number', 'Mpamba numbers in Malawi start with 08. Please provide a number beginning with 08.', 'invalid_mpamba');
+        throw new Error('Invalid mpamba prefix');
+      }
+
+      if ((networkRaw.includes('airtel') || networkRaw.includes('airtell')) && !leading.startsWith('09')) {
+        showModal('Invalid Airtel number', 'Airtel numbers in Malawi start with 09. Please provide a number beginning with 09.', 'invalid_airtel');
+        throw new Error('Invalid airtel prefix');
+      }
+
       // prefer payload.amount, otherwise prefer modal context amount, otherwise remainingToPay
       const modalAmount = paymentModalContext?.amount;
       const amountToSend = typeof payload.amount === 'number' ? payload.amount : (typeof modalAmount === 'number' ? modalAmount : (remainingToPay ?? (total + Number(deliveryFee ?? 0))));
@@ -713,16 +787,23 @@ export default function CheckoutPage() {
         throw new Error('Payment initiation failed (no checkout URL or tx_ref returned)');
       }
 
-      window.open(checkoutUrl, '_blank');
+      // show a single "Payment started" modal (deduped by txRef)
+      showModal('Payment started', 'PayChangu checkout started in a new tab. Complete payment there. This page will detect confirmation automatically.', `payment_started_${txRef}`);
+
+      // open checkout in new tab/window
+      try {
+        window.open(checkoutUrl, '_blank');
+      } catch (_) {
+        // If popup blocked, still keep modal and let user click link
+      }
 
       setPaymentTxRef(txRef);
       setPaymentStatus('pending');
       startPollingPaymentStatus(txRef);
-      setModal({ show: true, title: 'Payment started', body: 'PayChangu checkout started in a new tab. Complete payment there. This page will detect confirmation automatically.' });
       setShowPaymentModal(false);
       setPaymentModalContext(null);
 
-      // refresh payments but filtered to cartHash and also global pending list
+      // refresh payments but filtered to cartHash and also global pending list (one-time refresh)
       await fetchUserPayments(body.cart_hash ?? cartHash);
       await fetchAllNonOrderedPayments();
       await loadAllPendingPayments(body.cart_hash ?? cartHash);
@@ -735,7 +816,9 @@ export default function CheckoutPage() {
         await fetchAllNonOrderedPayments();
         await loadAllPendingPayments(payload.cart_hash ?? cartHash);
       } catch (_) {}
-      setModal({ show: true, title: 'Payment failed', body: err?.response?.data?.error ?? err?.message ?? 'Failed to initiate PayChangu payment.' });
+      if (!(err instanceof Error) || !/Missing mobile|Invalid mpamba|Invalid airtel/.test(String(err.message))) {
+        showModal('Payment failed', err?.response?.data?.error ?? err?.message ?? 'Failed to initiate PayChangu payment.', 'payment_failed_initiate');
+      }
       throw err;
     } finally {
       setPaymentLoading(false);
@@ -766,7 +849,7 @@ export default function CheckoutPage() {
       setPaymentStatus('pending');
       startPollingPaymentStatus(txRef);
 
-      setModal({ show: true, title: 'Proof uploaded', body: 'Your proof of payment was uploaded. Payment is pending admin approval.' });
+      showModal('Proof uploaded', 'Your proof of payment was uploaded. Payment is pending admin approval.', `proof_uploaded_${txRef}`);
       setShowPaymentModal(false);
       setPaymentModalContext(null);
 
@@ -807,12 +890,7 @@ export default function CheckoutPage() {
         }
       }
 
-      setModal({
-        show: true,
-        title: 'Upload failed',
-        body: userMessage,
-      });
-
+      showModal('Upload failed', userMessage, 'upload_failed');
       // ensure reservations are recalculated (in case server changed)
       try {
         await fetchUserPayments(cartHash);
@@ -831,29 +909,33 @@ export default function CheckoutPage() {
     setError(null);
 
     if (!cartItems.length) {
-      setModal({ show: true, title: 'Cart empty', body: 'Your cart is empty' });
+      showModal('Cart empty', 'Your cart is empty', 'place_order_empty');
       return;
     }
 
     if (!verified) {
-      setModal({ show: true, title: 'Not verified', body: 'Please verify your delivery location before placing the order.' });
+      showModal('Not verified', 'Please verify your delivery location before placing the order.', 'place_order_not_verified');
       return;
     }
 
     if (!gps.lat || !gps.lng) {
-      setModal({ show: true, title: 'Missing coordinates', body: 'GPS coordinates missing. Please verify location or use the fallback.' });
+      showModal('Missing coordinates', 'GPS coordinates missing. Please verify location or use the fallback.', 'place_order_no_coords');
       return;
     }
 
     if (!address || address.trim().length < 3) {
-      setModal({ show: true, title: 'Missing address', body: 'Please enter a delivery address (hostel/room/office).' });
+      showModal('Missing address', 'Please enter a delivery address (hostel/room/office).', 'place_order_no_address');
       return;
     }
 
     if (!paymentTxRef || paymentStatus !== 'success') {
-      setModal({ show: true, title: 'Payment required', body: 'Please make and confirm a payment first.' });
+      showModal('Payment required', 'Please make and confirm a payment first.', 'place_order_payment_required');
       return;
     }
+
+    // Prevent double-submit
+    if (placingOrder) return;
+    setPlacingOrder(true);
 
     try {
       const payload: any = {
@@ -869,7 +951,7 @@ export default function CheckoutPage() {
         const returnedStatus = res.data.order?.status ?? 'pending_delivery';
         const statusLabel = returnedStatus === 'pending_delivery' ? 'Pending delivery' : returnedStatus;
 
-        setModal({ show: true, title: 'Order placed', body: `Order placed — Order ID: ${res.data.order_id ?? '(check orders page)'}\nStatus: ${statusLabel}` });
+        showModal('Order placed', `Order placed — Order ID: ${res.data.order_id ?? '(check orders page)'}\nStatus: ${statusLabel}`, `order_placed_${res.data.order_id ?? ''}`);
 
         // refresh cart & payments
         const computed = await loadCart();
@@ -878,24 +960,17 @@ export default function CheckoutPage() {
         await fetchAllNonOrderedPayments();
         await loadAllPendingPayments(null, itemsSnapshot);
       } else {
-        setModal({ show: true, title: 'Order failed', body: res.data?.message ?? 'Failed to place order' });
+        showModal('Order failed', res.data?.message ?? 'Failed to place order', 'order_failed_response');
       }
     } catch (err: any) {
       console.error('Place order error', err);
-      setModal({ show: true, title: 'Order failed', body: err?.response?.data?.message ?? err?.message ?? 'Failed to place order' });
+      showModal('Order failed', err?.response?.data?.message ?? err?.message ?? 'Failed to place order', 'order_failed');
+    } finally {
+      setPlacingOrder(false);
     }
   };
 
   const handleCloseModal = () => {
-    // If the modal was opened because payment succeeded, navigate to orders
-    if (modalNavigateToOrders) {
-      // reset the flag and close modal, then navigate
-      setModal({ show: false });
-      setModalNavigateToOrders(false);
-      router.push('/orders');
-      return;
-    }
-
     // existing behavior: if order placed we also navigate
     if (modal.title === 'Order placed') {
       setModal({ show: false });
@@ -906,7 +981,7 @@ export default function CheckoutPage() {
     setModal({ show: false });
   };
 
-  const placeOrderDisabled = !(paymentStatus === 'success' && address.trim().length >= 3);
+  const placeOrderDisabled = placingOrder || !(paymentStatus === 'success' && address.trim().length >= 3 && !!paymentTxRef);
 
   // Determine if we should show the full verification UI
   const showVerificationBlock = !(verified && (paymentTxRef || (userPayments.length > 0)));
@@ -1116,7 +1191,7 @@ export default function CheckoutPage() {
                       ))}
                     </select>
                     <div className="form-text small mt-1">
-                      If GPS fails we will automatically use this selected location as fallback.
+                      
                     </div>
                   </div>
 
@@ -1141,7 +1216,7 @@ export default function CheckoutPage() {
                         onClick={() => useSelectedLocationFallback(false)}
                         disabled={!selectedLocationId || verifying}
                       >
-                        Use selected location as fallback
+                        verify selected location
                       </button>
                     )}
 
@@ -1229,15 +1304,22 @@ export default function CheckoutPage() {
                 {/* bottom: main payment/place-order buttons (same behaviour as before) */}
                 <div className="d-flex justify-content-end gap-3">
                   <button
-                    className="btn btn-primary"
+                    className="btn btn-primary d-flex align-items-center gap-2"
                     onClick={onOpenPaymentOptions}
                     disabled={!!pendingForCurrent || paymentLoading || !verified || (address.trim().length < 3)}
                   >
-                    {paymentLoading ? <LoadingSpinner /> : (pendingForCurrent ? 'Payment pending — awaiting approval' : (paymentStatus === 'pending' ? 'Payment pending...' : 'Make Payment'))}
+                    {paymentLoading ? <><LoadingSpinner size="sm" inline /><span>Processing</span></> : (pendingForCurrent ? 'Payment pending — awaiting approval' : (paymentStatus === 'pending' ? 'Payment pending...' : 'Make Payment'))}
                   </button>
 
-                  <button className="btn btn-success btn-lg" onClick={placeOrder} disabled={placeOrderDisabled}>
-                    Place Order
+                  <button className="btn btn-success btn-lg d-flex align-items-center gap-2" onClick={placeOrder} disabled={placeOrderDisabled}>
+                    {placingOrder ? (
+                      <>
+                        <LoadingSpinner size="sm" inline />
+                        <span>Placing order...</span>
+                      </>
+                    ) : (
+                      'Place Order'
+                    )}
                   </button>
                 </div>
               </>
