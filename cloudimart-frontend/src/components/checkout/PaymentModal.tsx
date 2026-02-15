@@ -1,19 +1,36 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
+
+type InitiatePayload = {
+  amount: number;
+  mobile: string;
+  network: string;
+  delivery_lat?: number;
+  delivery_lng?: number;
+  delivery_address?: string;
+  // new
+  cart_hash?: string | null;
+  cart_id?: number | null;
+  location_id?: number | null;
+};
 
 type Props = {
   show: boolean;
   amount: number;
   onClose: () => void;
-  onInitiatePayChangu: (payload: { amount: number; mobile: string; network: string; delivery_lat?: number; delivery_lng?: number; delivery_address?: string }) => Promise<{ checkout_url?: string; tx_ref?: string }>;
+  onInitiatePayChangu: (payload: InitiatePayload) => Promise<{ checkout_url?: string; tx_ref?: string }>;
   onUploadProof: (formData: FormData) => Promise<{ tx_ref?: string }>;
   defaultMobile?: string;
   defaultNetwork?: string;
   defaultAddress?: string;
   defaultLat?: number | undefined;
   defaultLng?: number | undefined;
+  // NEW optional props so the modal can prefill hidden cart values when available
+  cartHash?: string | null;
+  cartId?: number | null;
+  locationId?: number | null;
 };
 
 export default function PaymentModal({
@@ -27,6 +44,9 @@ export default function PaymentModal({
   defaultAddress = '',
   defaultLat,
   defaultLng,
+  cartHash = null,
+  cartId = null,
+  locationId = null,
 }: Props) {
   const safeAmount = Number.isFinite(Number(amount)) ? Number(amount) : 0;
 
@@ -37,6 +57,20 @@ export default function PaymentModal({
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    // reset fields whenever modal is (re)opened
+    if (show) {
+      setMethod('paychangu');
+      setMobile(defaultMobile);
+      setNetwork(defaultNetwork);
+      setMessage('');
+      setFile(null);
+      setErr(null);
+      setLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [show]);
 
   if (!show) return null;
 
@@ -63,17 +97,21 @@ export default function PaymentModal({
     }
     setLoading(true);
     try {
-      const payload = {
+      const payload: InitiatePayload = {
         amount: safeAmount,
         mobile,
         network,
         delivery_lat: defaultLat,
         delivery_lng: defaultLng,
         delivery_address: defaultAddress,
+        // include hidden cart values if provided
+        cart_hash: cartHash ?? undefined,
+        cart_id: typeof cartId === 'number' ? cartId : undefined,
+        location_id: typeof locationId === 'number' ? locationId : undefined,
       };
       await onInitiatePayChangu(payload);
     } catch (e: any) {
-      setErr(e?.message ?? 'Failed to initiate payment');
+      setErr(e?.response?.data?.message ?? e?.message ?? 'Failed to initiate payment');
     } finally {
       setLoading(false);
     }
@@ -96,13 +134,18 @@ export default function PaymentModal({
       fd.append('file', file, file.name);
       fd.append('mobile', mobile ?? '');
       fd.append('network', network ?? '');
-      fd.append('delivery_lat', defaultLat !== undefined ? String(defaultLat) : '');
-      fd.append('delivery_lng', defaultLng !== undefined ? String(defaultLng) : '');
+      if (defaultLat !== undefined && defaultLat !== null) fd.append('delivery_lat', String(defaultLat));
+      if (defaultLng !== undefined && defaultLng !== null) fd.append('delivery_lng', String(defaultLng));
       fd.append('delivery_address', defaultAddress ?? '');
       fd.append('note', message ?? '');
+      // append hidden cart fields if available
+      if (cartHash) fd.append('cart_hash', String(cartHash));
+      if (typeof cartId === 'number') fd.append('cart_id', String(cartId));
+      if (typeof locationId === 'number') fd.append('location_id', String(locationId));
+
       await onUploadProof(fd);
     } catch (e: any) {
-      setErr(e?.message ?? 'Failed to upload proof');
+      setErr(e?.response?.data?.message ?? e?.message ?? 'Failed to upload proof');
     } finally {
       setLoading(false);
     }
@@ -212,6 +255,15 @@ export default function PaymentModal({
                     </div>
                   </>
                 )}
+              </div>
+
+              {/*
+                 Hidden/diagnostic area: include cart_hash and cart_id in the modal DOM so tests
+                 or debugging can easily see them. They are also appended to submissions.
+              */}
+              <div style={{ display: 'none' }}>
+                <input type="hidden" name="cart_hash" value={cartHash ?? ''} readOnly />
+                <input type="hidden" name="cart_id" value={typeof cartId === 'number' ? String(cartId) : ''} readOnly />
               </div>
 
               {err && <div className="alert alert-danger mt-3">{err}</div>}
