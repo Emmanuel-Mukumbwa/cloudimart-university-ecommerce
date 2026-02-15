@@ -1,4 +1,3 @@
-// src/components/checkout/PaymentModal.tsx
 'use client';
 
 import React, { useState } from 'react';
@@ -7,7 +6,7 @@ import LoadingSpinner from '../../components/common/LoadingSpinner';
 type Props = {
   show: boolean;
   amount: number;
-  onClose: () => void; // simply closes modal
+  onClose: () => void;
   onInitiatePayChangu: (payload: { amount: number; mobile: string; network: string; delivery_lat?: number; delivery_lng?: number; delivery_address?: string }) => Promise<{ checkout_url?: string; tx_ref?: string }>;
   onUploadProof: (formData: FormData) => Promise<{ tx_ref?: string }>;
   defaultMobile?: string;
@@ -29,7 +28,6 @@ export default function PaymentModal({
   defaultLat,
   defaultLng,
 }: Props) {
-  // Defensive amount handling
   const safeAmount = Number.isFinite(Number(amount)) ? Number(amount) : 0;
 
   const [method, setMethod] = useState<'paychangu' | 'upload_proof'>('paychangu');
@@ -59,13 +57,10 @@ export default function PaymentModal({
 
   const submitPayChangu = async () => {
     setErr(null);
-
-    // basic client-side validation
     if (!mobile || mobile.trim().length < 3) {
       setErr('Please provide a valid mobile number to proceed.');
       return;
     }
-
     setLoading(true);
     try {
       const payload = {
@@ -76,14 +71,11 @@ export default function PaymentModal({
         delivery_lng: defaultLng,
         delivery_address: defaultAddress,
       };
-      const r = await onInitiatePayChangu(payload);
-      setLoading(false);
-      // caller will handle checkout_url / tx_ref / polling
-      return r;
+      await onInitiatePayChangu(payload);
     } catch (e: any) {
       setErr(e?.message ?? 'Failed to initiate payment');
+    } finally {
       setLoading(false);
-      throw e;
     }
   };
 
@@ -93,17 +85,13 @@ export default function PaymentModal({
       setErr('Please attach a proof image (screenshot or receipt).');
       return;
     }
-
-    // optional: require mobile when uploading proof so admins can contact payer
     if (!mobile || mobile.trim().length < 3) {
       setErr('Please provide a mobile number used to make the payment (for admin reference).');
       return;
     }
-
     setLoading(true);
     try {
       const fd = new FormData();
-      // Use safeAmount and include filename for the file entry
       fd.append('amount', String(safeAmount));
       fd.append('file', file, file.name);
       fd.append('mobile', mobile ?? '');
@@ -112,21 +100,20 @@ export default function PaymentModal({
       fd.append('delivery_lng', defaultLng !== undefined ? String(defaultLng) : '');
       fd.append('delivery_address', defaultAddress ?? '');
       fd.append('note', message ?? '');
-
-      const r = await onUploadProof(fd);
-      setLoading(false);
-      // caller will process tx_ref/polling
-      return r;
+      await onUploadProof(fd);
     } catch (e: any) {
       setErr(e?.message ?? 'Failed to upload proof');
+    } finally {
       setLoading(false);
-      throw e;
     }
   };
 
   return (
     <>
-      <div className="modal-backdrop fade show" style={{ zIndex: 1050, position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)' }} />
+      <div
+        className="modal-backdrop fade show"
+        style={{ zIndex: 1050, position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)' }}
+      />
       <div className="modal fade show d-block" tabIndex={-1} role="dialog" style={{ zIndex: 1060 }}>
         <div className="modal-dialog modal-dialog-centered modal-lg" role="document">
           <div className="modal-content">
@@ -136,13 +123,28 @@ export default function PaymentModal({
             </div>
 
             <div className="modal-body">
-              <p className="small text-muted">Choose how you want to make the payment. You can either checkout via PayChangu (online) or upload a proof for manual verification (Airtel/Mpamba/bank).</p>
+              <p className="small text-muted">
+                Choose how you want to make the payment. You can either checkout via PayChangu (online)
+                or upload a proof for manual verification (Airtel/Mpamba/bank).
+              </p>
 
               <div className="mb-3">
                 <label className="form-label small mb-2">Payment method</label>
                 <div className="btn-group" role="group">
-                  <button type="button" className={`btn btn-outline-primary ${method === 'paychangu' ? 'active' : ''}`} onClick={() => setMethod('paychangu')}>Pay via PayChangu</button>
-                  <button type="button" className={`btn btn-outline-primary ${method === 'upload_proof' ? 'active' : ''}`} onClick={() => setMethod('upload_proof')}>Upload proof (manual)</button>
+                  <button
+                    type="button"
+                    className={`btn btn-outline-primary ${method === 'paychangu' ? 'active' : ''}`}
+                    onClick={() => setMethod('paychangu')}
+                  >
+                    Pay via PayChangu
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-outline-primary ${method === 'upload_proof' ? 'active' : ''}`}
+                    onClick={() => setMethod('upload_proof')}
+                  >
+                    Upload proof (manual)
+                  </button>
                 </div>
               </div>
 
@@ -159,7 +161,11 @@ export default function PaymentModal({
 
                 <div className="col-md-6">
                   <label className="form-label small">Network</label>
-                  <select className="form-select" value={network} onChange={(e) => setNetwork(e.target.value)}>
+                  <select
+                    className="form-select"
+                    value={network}
+                    onChange={(e) => setNetwork(e.target.value)}
+                  >
                     <option value="mpamba">MPamba</option>
                     <option value="airtel">Airtel Money</option>
                     <option value="bank">Bank transfer</option>
@@ -170,14 +176,28 @@ export default function PaymentModal({
                   <>
                     <div className="col-12">
                       <label className="form-label small">Upload proof (image)</label>
-                      <input type="file" accept="image/*" className="form-control" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-                      <div className="form-text small">Attach screenshot or receipt. Admin will verify and mark payment approved.</div>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="form-control"
+                        onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                      />
+                      <div className="form-text small">
+                        Attach screenshot or receipt. Admin will verify and mark payment approved.
+                      </div>
                     </div>
 
                     <div className="col-12">
                       <label className="form-label small">Optional note / where you sent payment</label>
-                      <input className="form-control" value={message} onChange={(e) => setMessage(e.target.value)} placeholder="e.g. Sent to Cloudimart MPamba 099xxxxxx" />
-                      <div className="form-text small">You can mention account or transaction ID here.</div>
+                      <input
+                        className="form-control"
+                        value={message}
+                        onChange={(e) => setMessage(e.target.value)}
+                        placeholder="e.g. Sent to Cloudimart MPamba 099xxxxxx"
+                      />
+                      <div className="form-text small">
+                        You can mention account or transaction ID here.
+                      </div>
                     </div>
 
                     <div className="col-12">
@@ -198,39 +218,43 @@ export default function PaymentModal({
             </div>
 
             <div className="modal-footer">
-              <button type="button" className="btn btn-secondary" onClick={handleClose} disabled={loading}>Cancel</button>
+              <button type="button" className="btn btn-secondary" onClick={handleClose} disabled={loading}>
+                Cancel
+              </button>
 
               {method === 'paychangu' ? (
                 <button
                   type="button"
-                  className="btn btn-primary"
-                  onClick={async () => {
-                    try {
-                      await submitPayChangu();
-                      // parent handles checkout/polling
-                    } catch (e) {
-                      // error already set
-                    }
-                  }}
+                  className="btn btn-primary d-flex align-items-center justify-content-center gap-2"
+                  style={{ minWidth: 190 }}
+                  onClick={submitPayChangu}
                   disabled={loading || !mobile || mobile.trim().length < 3}
                 >
-                  {loading ? <LoadingSpinner /> : 'Proceed to PayChangu'}
+                  {loading ? (
+                    <>
+                      <LoadingSpinner size="sm" inline />
+                      <span>Processing...</span>
+                    </>
+                  ) : (
+                    'Proceed to PayChangu'
+                  )}
                 </button>
               ) : (
                 <button
                   type="button"
-                  className="btn btn-success"
-                  onClick={async () => {
-                    try {
-                      await submitProof();
-                      // parent handles tx_ref & polling
-                    } catch (e) {
-                      // error already set
-                    }
-                  }}
+                  className="btn btn-success d-flex align-items-center justify-content-center gap-2"
+                  style={{ minWidth: 210 }}
+                  onClick={submitProof}
                   disabled={loading || !file || !mobile || mobile.trim().length < 3}
                 >
-                  {loading ? <LoadingSpinner /> : 'Upload proof & submit'}
+                  {loading ? (
+                    <>
+                      <LoadingSpinner size="sm" inline />
+                      <span>Uploading...</span>
+                    </>
+                  ) : (
+                    'Upload proof & submit'
+                  )}
                 </button>
               )}
             </div>
