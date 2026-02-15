@@ -23,7 +23,7 @@ export default function Footer() {
           {/* Right: contact */}
           <div className="small" style={{ color: 'var(--muted)' }}>
             <a href="mailto:support@cloudimart.example" className="text-decoration-none" style={{ color: 'inherit' }}>
-              support@cloudimart.ac
+              support@cloudimart.mw
             </a>
           </div>
         </div>
