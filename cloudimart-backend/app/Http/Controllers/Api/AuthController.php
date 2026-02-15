@@ -104,8 +104,11 @@ class AuthController extends Controller
         $user = User::where('email', $request->email)->first();
 
         if (! $user || ! Hash::check($request->password, $user->password)) {
+            // Return field-level validation messages for both email and password
+            // so the frontend can map the error exactly to the right inputs.
             throw ValidationException::withMessages([
-                'email' => ['The provided credentials are incorrect.']
+                'email' => ['The provided credentials are incorrect.'],
+                'password' => ['The provided credentials are incorrect.'],
             ]);
         }
 
@@ -157,7 +160,7 @@ class AuthController extends Controller
     protected function redirectForRole(string $role): string
     {
         return match ($role) {
-            'admin' => '/admin/dashboard',
+            'admin' => '/admin/dashboard', 
             'delivery' => '/delivery/dashboard',
             default => '/', // normal user -> home
         };
