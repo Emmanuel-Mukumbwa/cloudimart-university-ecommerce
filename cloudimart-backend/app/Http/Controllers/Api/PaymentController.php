@@ -79,13 +79,16 @@ class PaymentController extends Controller
             'created_at' => $p->created_at ? $p->created_at->toDateTimeString() : null,
             'proof_url' => $p->proof_url ?? null,              // stored path or absolute if admin saved absolute
             'proof_url_full' => $proofUrlFull,                 // resolved absolute URL (or null)
+            // Include new cart linkage fields
+            'cart_id' => $p->cart_id ?? null,
+            'cart_updated_at' => $p->cart_updated_at ? ($p->cart_updated_at instanceof \DateTime ? $p->cart_updated_at->format('Y-m-d H:i:s') : (string)$p->cart_updated_at) : null,
             'meta' => $meta,
         ];
     }
 
     /**
      * POST /api/payment/initiate
-     * Expects: amount, mobile, network, delivery_lat, delivery_lng, delivery_address, cart_hash, location_id (optional)
+     * Expects: amount, mobile, network, delivery_lat, delivery_lng, delivery_address, cart_hash, cart_id (optional), location_id (optional)
      * Returns: { checkout_url, tx_ref, payment }
      */
     public function initiate(Request $request)
@@ -98,6 +101,7 @@ class PaymentController extends Controller
             'delivery_lng' => 'nullable|numeric',
             'delivery_address' => 'nullable|string',
             'cart_hash' => 'nullable|string',
+            'cart_id' => 'nullable|integer|exists:carts,id',
             'location_id' => 'nullable|integer',
         ]);
 
@@ -161,6 +165,10 @@ class PaymentController extends Controller
             $amountToUse = $requestedAmount;
         }
 
+        // compute cart linkage fields (new) — prefer server cart if available
+        $cartId = $cart ? $cart->id : ($request->input('cart_id') ? intval($request->input('cart_id')) : null);
+        $cartUpdatedAt = $cart && $cart->updated_at ? $cart->updated_at->toDateTimeString() : null;
+
         // Create a local payment record (include snapshot & cart_total & delivery_fee in meta)
         $payment = Payment::create([
             'user_id' => $userId,
@@ -170,6 +178,9 @@ class PaymentController extends Controller
             'status' => 'pending',
             'mobile' => $request->mobile,
             'network' => $request->network,
+            // new columns
+            'cart_id' => $cartId,
+            'cart_updated_at' => $cartUpdatedAt,
             'meta' => [
                 'delivery_lat' => $request->delivery_lat,
                 'delivery_lng' => $request->delivery_lng,
@@ -206,6 +217,8 @@ class PaymentController extends Controller
                     // include delivery_fee & cart_hash to help reconciliation on provider side if needed
                     'delivery_fee' => $deliveryFee,
                     'cart_hash' => $request->cart_hash ?? null,
+                    // optionally include cart_id for provider meta
+                    'cart_id' => $cartId,
                 ],
             ];
 
@@ -320,7 +333,7 @@ class PaymentController extends Controller
             $payment->update(['status' => 'failed']);
         } else {
             $meta = $payment->meta ?? [];
-            $meta = array_merge(is_array($meta) ? $meta : json_decode($meta, true) ?? [], ['last_callback' => $request->all()]);
+            $meta = array_merge(is_array($meta) ? $meta : (json_decode($meta, true) ?: []), ['last_callback' => $request->all()]);
             $payment->update(['meta' => $meta]);
         }
 
@@ -329,7 +342,7 @@ class PaymentController extends Controller
 
     /**
      * GET /api/payments
-     * Supports ?cart_hash=... or ?tx_ref=... and ?exclude_ordered=1 and ?only_pending=1
+     * Supports ?cart_hash=... or ?cart_id=... or ?tx_ref=... and ?exclude_ordered=1 and ?only_pending=1
      */
     public function index(Request $request)
     {
@@ -338,6 +351,7 @@ class PaymentController extends Controller
 
         $paymentsQuery = Payment::where('user_id', $user->id)->orderBy('created_at', 'desc');
 
+        $cartId = $request->query('cart_id'); // prefer cart_id if supplied
         $cartHash = $request->query('cart_hash');
         $txRef = $request->query('tx_ref');
         $excludeOrdered = $request->query('exclude_ordered'); // e.g. 1
@@ -345,8 +359,11 @@ class PaymentController extends Controller
 
         if ($txRef) {
             $paymentsQuery->where('tx_ref', $txRef);
+        } elseif ($cartId) {
+            // filter by cart_id column (preferred)
+            $paymentsQuery->where('cart_id', $cartId);
         } elseif ($cartHash) {
-            // filter by cart_hash in meta (assumes meta is JSON)
+            // fallback: filter by cart_hash in meta (assumes meta is JSON)
             // JSON_EXTRACT returns null when key missing; equality will match exact string
             $paymentsQuery->whereRaw("JSON_EXTRACT(meta, '$.cart_hash') = ?", [$cartHash]);
         }
@@ -372,7 +389,7 @@ class PaymentController extends Controller
 
     /**
      * POST /api/payment/upload-proof
-     * Fields: file, amount, mobile, network, delivery_lat, delivery_lng, delivery_address, note, cart_hash, location_id (optional)
+     * Fields: file, amount, mobile, network, delivery_lat, delivery_lng, delivery_address, note, cart_hash, cart_id, location_id (optional)
      */
     public function uploadProof(Request $request)
     {
@@ -389,6 +406,7 @@ class PaymentController extends Controller
             'delivery_address' => 'nullable|string',
             'note' => 'nullable|string',
             'cart_hash' => 'nullable|string',
+            'cart_id' => 'nullable|integer|exists:carts,id',
             'location_id' => 'nullable|integer',
         ]);
 
@@ -431,6 +449,10 @@ class PaymentController extends Controller
 
             $txRef = 'proof_' . uniqid();
 
+            // compute cart linkage fields (new) — prefer actual server cart id if present, otherwise accept provided cart_id
+            $cartId = $cart ? $cart->id : (isset($validated['cart_id']) ? intval($validated['cart_id']) : null);
+            $cartUpdatedAt = $cart && $cart->updated_at ? $cart->updated_at->toDateTimeString() : null;
+
             $payment = Payment::create([
                 'user_id' => $user->id,
                 'tx_ref' => $txRef,
@@ -439,6 +461,9 @@ class PaymentController extends Controller
                 'status' => 'pending',
                 'mobile' => $validated['mobile'],
                 'network' => $validated['network'],
+                // new columns
+                'cart_id' => $cartId,
+                'cart_updated_at' => $cartUpdatedAt,
                 'meta' => [
                     'note' => $validated['note'] ?? null,
                     'delivery_lat' => $validated['delivery_lat'] ?? null,
@@ -540,7 +565,7 @@ class PaymentController extends Controller
 
                 // verify the payment amount matches snapshot total + delivery_fee (if any)
                 $expectedTotal = floatval($total) + floatval($deliveryFeeFromMeta);
-                if (floatval($payment->amount) != floatval($expectedTotal)) {
+                if (round(floatval($payment->amount), 2) != round(floatval($expectedTotal), 2)) {
                     $meta['amount_mismatch'] = [
                         'payment' => $payment->amount,
                         'snapshot_total' => $total,
@@ -655,7 +680,7 @@ class PaymentController extends Controller
             $deliveryFeeFromMeta = isset($payment->meta['delivery_fee']) ? floatval($payment->meta['delivery_fee']) : 0.0;
             $expectedTotal = floatval($total) + floatval($deliveryFeeFromMeta);
 
-            if (floatval($payment->amount) != floatval($expectedTotal)) {
+            if (round(floatval($payment->amount), 2) != round(floatval($expectedTotal), 2)) {
                 $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
                 $meta['amount_mismatch'] = ['payment' => $payment->amount, 'cart_total' => $total, 'delivery_fee' => $deliveryFeeFromMeta, 'expected_total' => $expectedTotal];
                 $payment->meta = $meta;
