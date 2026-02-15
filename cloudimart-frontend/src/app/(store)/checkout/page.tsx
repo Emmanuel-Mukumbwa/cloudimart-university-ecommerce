@@ -27,6 +27,7 @@ export default function CheckoutPage() {
   const [cartItems, setCartItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [cartHash, setCartHash] = useState<string | null>(null);
+  const [cartId, setCartId] = useState<number | null>(null); // <-- new
 
   // Location / GPS
   const [gps, setGps] = useState<{ lat?: number; lng?: number }>({});
@@ -64,7 +65,7 @@ export default function CheckoutPage() {
   const [paymentLoading, setPaymentLoading] = useState(false);
 
   // Payment modal context (which snapshot/cart the modal is currently targeting)
-  const [paymentModalContext, setPaymentModalContext] = useState<{ cart_hash?: string | null; amount?: number } | null>(null);
+  const [paymentModalContext, setPaymentModalContext] = useState<{ cart_hash?: string | null; cart_id?: number | null; amount?: number } | null>(null);
 
   // all non-ordered payments (pending + failed) — used to group by cart_hash
   const [allNonOrderedPayments, setAllNonOrderedPayments] = useState<any[]>([]);
@@ -146,17 +147,17 @@ export default function CheckoutPage() {
     (async () => {
       setInitialLoading(true);
       try {
-        // Load cart first (so we compute a cartHash), then locations/user, then payments filtered by cartHash
-        const computed = await loadCart(); // now returns snapshot
+        // Load cart first (so we compute a cartHash), then locations/user, then payments filtered by cartHash/cartId
+        const computed = await loadCart(); // now returns snapshot + cartId
         const itemsSnapshot = computed?.items ?? [];
         const hash = computed?.hash ?? null;
 
         await loadLocationsAndUser(hash ?? null);
-        await fetchUserPayments(hash ?? null);
+        await fetchUserPayments(hash ?? null, computed?.cartId ?? null);
         await fetchAllNonOrderedPayments();
 
         // Important: compute global reservations after cart loaded — pass snapshot to avoid race
-        await loadAllPendingPayments(hash ?? null, itemsSnapshot);
+        await loadAllPendingPayments(hash ?? null, itemsSnapshot, computed?.cartId ?? null);
       } finally {
         if (mounted) setInitialLoading(false);
       }
@@ -211,35 +212,55 @@ export default function CheckoutPage() {
     }
   };
 
-  // Load cart items and totals (returns computed snapshot: { hash, items, total })
-  const loadCart = async (): Promise<{ hash: string | null; items: any[]; total: number } | null> => {
+  // Load cart items and totals (returns computed snapshot: { hash, items, total, cartId })
+  const loadCart = async (): Promise<{ hash: string | null; items: any[]; total: number; cartId?: number | null } | null> => {
     try {
       const res = await client.get('/api/cart');
-      const items = extractArrayFromResponse(res);
+
+      // Try to detect cart object shape and items
+      const cartObj = res.data?.cart ?? res.data ?? res.data?.data ?? null;
+      let items: any[] = [];
+      if (cartObj) {
+        if (Array.isArray(cartObj.items)) items = cartObj.items;
+        else items = extractArrayFromResponse(res);
+      } else {
+        items = extractArrayFromResponse(res);
+      }
+
       const computedTotal = items.reduce((sum: number, i: any) => sum + Number(i.product?.price ?? 0) * (i.quantity ?? 1), 0);
       const hash = computeCartHash(items);
+
+      // attempt to detect cart id
+      const detectedCartId =
+        (cartObj && (cartObj.id ?? cartObj.cart_id ?? null)) ??
+        null;
 
       // update state (non-blocking) but also return the immediate computed snapshot
       setCartItems(items);
       setTotal(computedTotal);
       setCartHash(hash);
+      setCartId(detectedCartId ? Number(detectedCartId) : null);
 
-      return { hash, items, total: computedTotal };
+      return { hash, items, total: computedTotal, cartId: detectedCartId ? Number(detectedCartId) : null };
     } catch (e) {
       setCartItems([]);
       setTotal(0);
       setCartHash(null);
-      return { hash: null, items: [], total: 0 };
+      setCartId(null);
+      return { hash: null, items: [], total: 0, cartId: null };
     }
   };
 
-  // Fetch user's payment uploads & statuses (optionally filtered by cartHash)
-  const fetchUserPayments = async (filterHash: string | null = null) => {
+  // Fetch user's payment uploads & statuses (optionally filtered by cartHash OR cartId)
+  const fetchUserPayments = async (filterHash: string | null = null, overrideCartId: number | null = null) => {
     setLoadingPayments(true);
     try {
       const effectiveHash = filterHash ?? cartHash ?? null;
+      const effectiveCartId = typeof overrideCartId !== 'undefined' ? overrideCartId : cartId;
       const params: any = {};
-      if (effectiveHash) params.cart_hash = effectiveHash;
+      // prefer cart_id when available
+      if (effectiveCartId) params.cart_id = effectiveCartId;
+      else if (effectiveHash) params.cart_hash = effectiveHash;
       // don't force only_pending here; we want pending+failed+success for display
       params.exclude_ordered = 1;
       const res = await client.get('/api/payments', { params });
@@ -252,7 +273,7 @@ export default function CheckoutPage() {
     }
   };
 
-  // Fetch all non-ordered payments (pending + failed) for grouping & display
+  // Fetch all non-ordered payments (pending + failed) for grouping & display (global)
   const fetchAllNonOrderedPayments = async () => {
     setLoadingAllPayments(true);
     try {
@@ -278,26 +299,34 @@ export default function CheckoutPage() {
 
   // --- IMPORTANT CHANGE ---
   // Fetch all pending payments for the user (global) and compute reservation map,
-  // but only count reservations from payments that apply to the current cart (matching cart_hash).
+  // but only count reservations from payments that apply to the current cart (matching cart_id OR cart_hash).
   // Reservations are keyed by composite keys (id:<id> or name:<normalized-name>) to avoid accidental mixing.
-  const loadAllPendingPayments = async (currentHash: string | null = null, cartItemsForCalc: any[] | null = null) => {
+  const loadAllPendingPayments = async (currentHash: string | null = null, cartItemsForCalc: any[] | null = null, overrideCartId: number | null = null) => {
     try {
-      const res = await client.get('/api/payments', { params: { only_pending: 1, exclude_ordered: 1 } });
+      const effectiveCartId = typeof overrideCartId !== 'undefined' ? overrideCartId : cartId;
+      const params: any = { only_pending: 1, exclude_ordered: 1 };
+      if (effectiveCartId) params.cart_id = effectiveCartId;
+      else if (currentHash) params.cart_hash = currentHash;
+
+      const res = await client.get('/api/payments', { params });
       const payload = res.data?.data ?? res.data ?? [];
       const payments = Array.isArray(payload) ? payload : [];
 
       const reservedMap: Record<string, number> = {};
 
-      // Only include payments whose meta.cart_hash equals currentHash (strict equality),
-      // otherwise treat them as other pending payments.
+      // Only include payments whose cart_id equals effectiveCartId OR whose meta.cart_hash equals currentHash (if provided)
       payments.forEach((p: any) => {
-        const meta = p.meta ?? {};
-        const ph = meta?.cart_hash ?? null;
-        if (currentHash && ph !== currentHash) return; // skip reservations for other carts
-        // only count pending payments (server filter should already ensure status pending, but double-check)
+        // ensure it's pending
         if ((p.status ?? '').toString() !== 'pending') return;
 
-        const snapshot = Array.isArray(meta?.cart_snapshot) ? meta.cart_snapshot : [];
+        if (effectiveCartId) {
+          if (Number(p.cart_id ?? 0) !== Number(effectiveCartId)) return;
+        } else if (currentHash) {
+          const ph = p.meta?.cart_hash ?? null;
+          if (String(ph ?? '') !== String(currentHash ?? '')) return;
+        }
+
+        const snapshot = Array.isArray(p.meta?.cart_snapshot) ? p.meta.cart_snapshot : [];
         snapshot.forEach((si: any) => {
           const key = keyForSnapshotItem(si);
           if (!key) return;
@@ -756,8 +785,16 @@ export default function CheckoutPage() {
 
   // Shared function to open PaymentModal for a specific cart snapshot
   const openPaymentModalForCart = (targetCartHash: string | null, amount: number) => {
-    setPaymentModalContext({ cart_hash: targetCartHash, amount });
+    setPaymentModalContext({ cart_hash: targetCartHash, amount, cart_id: cartId ?? null });
     setShowPaymentModal(true);
+  };
+
+  // Helper that checks whether a payment belongs to the current cart
+  const isPaymentForCurrent = (p: any) => {
+    if (!p) return false;
+    if (cartId && Number(p.cart_id ?? 0) === Number(cartId)) return true;
+    if (cartHash && String(p.meta?.cart_hash ?? '') === String(cartHash)) return true;
+    return false;
   };
 
   // Open payment options modal (main checkout button) — opens modal for the current cart snapshot
@@ -786,8 +823,8 @@ export default function CheckoutPage() {
     const fee = Number(deliveryFee ?? 0);
     const expectedTotal = currentTotal + fee;
 
-    // payments for current cart
-    const paymentsForCurrent = allNonOrderedPayments.filter((p) => String(p.meta?.cart_hash ?? '') === String(cartHash ?? ''));
+    // payments for current cart — prefer cart_id match, fallback to cart_hash
+    const paymentsForCurrent = allNonOrderedPayments.filter((p) => isPaymentForCurrent(p));
     // consider only pending+success as "covered" money
     const coveredMoney = paymentsForCurrent
       .filter((p) => (p.status === 'pending' || p.status === 'success'))
@@ -797,9 +834,9 @@ export default function CheckoutPage() {
     openPaymentModalForCart(cartHash, currentRemaining <= 0 ? expectedTotal : currentRemaining);
   };
 
-  // On PayChangu initiation (now includes cart_hash and location_id) — use amount from payload or modal context
+  // On PayChangu initiation (now includes cart_hash, cart_id and location_id) — use amount from payload or modal context
   // ---- ADD: validate mobile + network prefix before initiating
-  const handleInitiatePayChangu = async (payload: { amount?: number; mobile: string; network: string; delivery_lat?: number; delivery_lng?: number; delivery_address?: string; cart_hash?: string | null; location_id?: number | null }) => {
+  const handleInitiatePayChangu = async (payload: { amount?: number; mobile: string; network: string; delivery_lat?: number; delivery_lng?: number; delivery_address?: string; cart_hash?: string | null; cart_id?: number | null; location_id?: number | null }) => {
     setPaymentLoading(true);
     try {
       // --- Validate mobile presence & prefix for mpamba/airtel ---
@@ -833,10 +870,13 @@ export default function CheckoutPage() {
       const modalAmount = paymentModalContext?.amount;
       const amountToSend = typeof payload.amount === 'number' ? payload.amount : (typeof modalAmount === 'number' ? modalAmount : (remainingToPay ?? (total + Number(deliveryFee ?? 0))));
       const targetCartHash = payload.cart_hash ?? paymentModalContext?.cart_hash ?? cartHash;
+      const targetCartId = typeof payload.cart_id !== 'undefined' ? payload.cart_id : (paymentModalContext?.cart_id ?? cartId ?? null);
+
       const body = {
         ...payload,
         amount: amountToSend,
         cart_hash: targetCartHash,
+        cart_id: targetCartId,
         delivery_address: payload.delivery_address ?? address ?? '',
         location_id: payload.location_id ?? selectedLocationId ?? null, // include location_id so server picks correct fee
       };
@@ -867,18 +907,18 @@ export default function CheckoutPage() {
       setShowPaymentModal(false);
       setPaymentModalContext(null);
 
-      // refresh payments but filtered to cartHash and also global pending list (one-time refresh)
-      await fetchUserPayments(body.cart_hash ?? cartHash);
+      // refresh payments but filtered to cartId/cartHash and also global pending list (one-time refresh)
+      await fetchUserPayments(body.cart_hash ?? cartHash, body.cart_id ?? cartId);
       await fetchAllNonOrderedPayments();
-      await loadAllPendingPayments(body.cart_hash ?? cartHash);
+      await loadAllPendingPayments(body.cart_hash ?? cartHash, undefined, body.cart_id ?? cartId);
 
       return { checkout_url: checkoutUrl, tx_ref: txRef };
     } catch (err: any) {
       // refresh payments so UI shows accurate remaining after failure
       try {
-        await fetchUserPayments(payload.cart_hash ?? cartHash);
+        await fetchUserPayments(payload.cart_hash ?? cartHash, payload.cart_id ?? cartId);
         await fetchAllNonOrderedPayments();
-        await loadAllPendingPayments(payload.cart_hash ?? cartHash);
+        await loadAllPendingPayments(payload.cart_hash ?? cartHash, undefined, payload.cart_id ?? cartId);
       } catch (_) {}
       if (!(err instanceof Error) || !/Missing mobile|Invalid mpamba|Invalid airtel/.test(String(err.message))) {
         showModal('Payment failed', err?.response?.data?.error ?? err?.message ?? 'Failed to initiate PayChangu payment.', 'payment_failed_initiate');
@@ -890,7 +930,7 @@ export default function CheckoutPage() {
     }
   };
 
-  // handleUploadProof (updated) - ensure location_id & cart_hash appended
+  // handleUploadProof (updated) - ensure location_id, cart_hash & cart_id appended
   const handleUploadProof = async (formData: FormData) => {
     setPaymentLoading(true);
     try {
@@ -898,6 +938,8 @@ export default function CheckoutPage() {
       if (!formData.get('cart_hash') && paymentModalContext?.cart_hash) formData.append('cart_hash', String(paymentModalContext.cart_hash));
       if (!formData.get('delivery_address') && address && address.trim().length > 0) formData.append('delivery_address', address.trim());
       if (!formData.get('location_id') && selectedLocationId) formData.append('location_id', String(selectedLocationId));
+      // append cart_id when available
+      if (!formData.get('cart_id') && (paymentModalContext?.cart_id ?? cartId)) formData.append('cart_id', String(paymentModalContext?.cart_id ?? cartId ?? ''));
 
       // IMPORTANT: ensure axios does NOT force a Content-Type (so browser can add boundary)
       // Passing Content-Type: undefined will override default application/json if it's set globally.
@@ -1077,9 +1119,10 @@ export default function CheckoutPage() {
 
   // Derived banners & coverage calculation
   const pendingPayments = allNonOrderedPayments.filter((p) => (p.status ?? '') === 'pending');
-  const pendingForCurrent = pendingPayments.find((p) => String(p.meta?.cart_hash ?? '') === String(cartHash ?? '')) ?? null;
-  const failedForCurrent = allNonOrderedPayments.find((p) => (p.status ?? '') === 'failed' && String(p.meta?.cart_hash ?? '') === String(cartHash ?? '')) ?? null;
-  const pendingForOthers = pendingPayments.filter((p) => String(p.meta?.cart_hash ?? '') !== String(cartHash ?? ''));
+
+  const pendingForCurrent = pendingPayments.find((p) => isPaymentForCurrent(p)) ?? null;
+  const failedForCurrent = allNonOrderedPayments.find((p) => (p.status ?? '') === 'failed' && isPaymentForCurrent(p)) ?? null;
+  const pendingForOthers = pendingPayments.filter((p) => !isPaymentForCurrent(p));
 
   // Compute covered amount display more simply if userPayments include pending entries for current cart
   const computeCoveredFromUserPayments = () => {
@@ -1087,7 +1130,7 @@ export default function CheckoutPage() {
       if (!Array.isArray(userPayments)) return 0;
       let covered = 0;
       userPayments.forEach((p) => {
-        if (String(p.meta?.cart_hash ?? '') !== String(cartHash ?? '')) return;
+        if (!isPaymentForCurrent(p)) return;
         if ((p.status ?? '') !== 'success' && (p.status ?? '') !== 'pending') return;
         if (!Array.isArray(p.meta?.cart_snapshot)) return;
         // for manual proof or gateway payments, prefer counting money amount (safer)
@@ -1137,17 +1180,19 @@ export default function CheckoutPage() {
         defaultLng={gps.lng}
         onClose={() => { setShowPaymentModal(false); setPaymentModalContext(null); }}
         onInitiatePayChangu={async (payload) => {
-          // ensure the cart_hash is passed from modal context if caller doesn't
+          // ensure the cart_hash & cart_id are passed from modal context if caller doesn't
           const body = {
             ...payload,
             cart_hash: payload.cart_hash ?? paymentModalContext?.cart_hash ?? cartHash,
+            cart_id: typeof payload.cart_id !== 'undefined' ? payload.cart_id : (paymentModalContext?.cart_id ?? cartId ?? null),
             location_id: payload.location_id ?? paymentModalContext?.location_id ?? selectedLocationId ?? null,
           };
           return handleInitiatePayChangu(body);
         }}
         onUploadProof={async (formData) => {
-          // ensure modal's cart_hash & location_id are applied if present
+          // ensure modal's cart_hash, cart_id & location_id are applied if present
           if (!formData.get('cart_hash') && paymentModalContext?.cart_hash) formData.append('cart_hash', String(paymentModalContext.cart_hash));
+          if (!formData.get('cart_id') && (paymentModalContext?.cart_id ?? cartId)) formData.append('cart_id', String(paymentModalContext?.cart_id ?? cartId ?? ''));
           if (!formData.get('location_id') && selectedLocationId) formData.append('location_id', String(selectedLocationId));
           return handleUploadProof(formData);
         }}
