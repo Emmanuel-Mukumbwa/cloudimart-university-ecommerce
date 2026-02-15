@@ -7,13 +7,15 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use App\Models\Cart;
+use Illuminate\Support\Facades\Log;
 
 class Payment extends Model
 {
     use HasFactory;
 
     /**
-     * Table name
+     * Table name 
      *
      * @var string
      */
@@ -60,13 +62,6 @@ class Payment extends Model
 
     /**
      * Accessor: absolute URL for proof image (or null)
-     *
-     * Resolves:
-     * - absolute URLs (http/https or protocol-relative) => returned as-is
-     * - stored public disk paths (e.g. "payments/abc.jpg") => Storage::disk('public')->url(...)
-     * - fallback to asset('storage/...') if Storage disk url fails for any reason
-     *
-     * @return string|null
      */
     public function getProofUrlFullAttribute()
     {
@@ -83,7 +78,6 @@ class Payment extends Model
 
         // If it looks like a storage path (no scheme), attempt to resolve via public disk
         try {
-            // If stored with store('payments', 'public'), this will produce a full URL.
             $url = Storage::disk('public')->url(ltrim($raw, '/'));
             if ($url) {
                 return $url;
@@ -98,8 +92,6 @@ class Payment extends Model
 
     /**
      * Payment belongs to a user.
-     *
-     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo
      */
     public function user(): BelongsTo
     {
@@ -108,30 +100,95 @@ class Payment extends Model
 
     /**
      * Booted model events
-     * - When a payment is deleted, attempt to remove the associated proof file from storage
      */
     protected static function booted()
     {
+        // preserve your existing deleting behavior
         static::deleting(function (Payment $payment) {
             try {
                 $path = $payment->proof_url;
                 if (!empty($path)) {
-                    // only delete if it looks like a local storage path (not external URL)
                     if (!preg_match('#^https?://#i', $path) && !str_starts_with($path, '//')) {
                         Storage::disk('public')->delete(ltrim($path, '/'));
                     }
                 }
             } catch (\Throwable $e) {
-                // deliberately non-fatal: log if you want, but don't block deletion
-                // Log::warning('Failed to delete payment proof: ' . $e->getMessage());
+                // non-fatal
+            }
+        });
+
+        /**
+         * Ensure every Payment has meta.cart_hash and meta.cart_snapshot.
+         * We only add them if missing — so we won't overwrite anything your controllers/gateway already set.
+         */
+        static::creating(function (Payment $payment) {
+            try {
+                // Normalize existing meta (never null)
+                $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
+                $hasCartHash = isset($meta['cart_hash']) && $meta['cart_hash'] !== null && $meta['cart_hash'] !== '';
+                $hasSnapshot = isset($meta['cart_snapshot']) && is_array($meta['cart_snapshot']) && count($meta['cart_snapshot']) > 0;
+
+                // If both present, nothing to do
+                if ($hasCartHash && $hasSnapshot) {
+                    $payment->meta = $meta;
+                    return;
+                }
+
+                // Attempt to build server-side snapshot from user's cart (if user_id present)
+                $snapshot = [];
+                if (!empty($payment->user_id)) {
+                    try {
+                        $cart = Cart::where('user_id', $payment->user_id)->with('items.product')->first();
+                        if ($cart && $cart->items) {
+                            foreach ($cart->items as $ci) {
+                                $snapshot[] = [
+                                    'product_id' => (int)($ci->product_id ?? 0),
+                                    'name' => $ci->product->name ?? null,
+                                    'price' => (float)($ci->product->price ?? 0),
+                                    'quantity' => (int)($ci->quantity ?? 0),
+                                ];
+                            }
+                        }
+                    } catch (\Throwable $e) {
+                        Log::warning('Failed to build cart snapshot for payment creating: ' . $e->getMessage());
+                    }
+                }
+
+                // If we still have no snapshot (e.g. no user/cart), ensure snapshot is an array (possibly empty)
+                $metaSnapshot = is_array($meta['cart_snapshot'] ?? null) ? $meta['cart_snapshot'] : $snapshot;
+
+                // If there's still no snapshot, use empty array (so hash will still be deterministic)
+                if (!is_array($metaSnapshot)) {
+                    $metaSnapshot = [];
+                }
+
+                // Compute cart hash if missing — use same lightweight algorithm as the frontend (djb2-like)
+                if (empty($meta['cart_hash'])) {
+                    $meta['cart_hash'] = self::computeCartHash($metaSnapshot);
+                }
+
+                // Ensure cart_snapshot is present
+                if (!isset($meta['cart_snapshot']) || !is_array($meta['cart_snapshot']) || count($meta['cart_snapshot']) === 0) {
+                    $meta['cart_snapshot'] = $metaSnapshot;
+                }
+
+                // Also optionally preserve delivery_address/location_id if present in model fields (some controllers may set them separately)
+                if (empty($meta['delivery_address']) && !empty($payment->meta['delivery_address'])) {
+                    $meta['delivery_address'] = $payment->meta['delivery_address'];
+                }
+
+                $payment->meta = $meta;
+            } catch (\Throwable $e) {
+                // If anything goes wrong, do not block payment creation — just log
+                Log::warning('Payment model creating hook failed: ' . $e->getMessage());
+                // Ensure meta is at least an array
+                $payment->meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
             }
         });
     }
 
     /**
      * Helper: returns normalized meta array (never null)
-     *
-     * @return array
      */
     public function getNormalizedMeta(): array
     {
@@ -140,8 +197,6 @@ class Payment extends Model
 
     /**
      * Short human readable summary (useful in logs/UI)
-     *
-     * @return string
      */
     public function summary(): string
     {
@@ -150,5 +205,45 @@ class Payment extends Model
         $st = $this->status ?? 'unknown';
         $u = $this->user ? ($this->user->name ?? "ID{$this->user->id}") : "UID:{$this->user_id}";
         return "{$tx} — MK {$amt} — {$st} — {$u}";
+    }
+
+    /**
+     * Compute the lightweight cart hash (djb2-like then >>>0 then base36) to match the client.
+     * Accepts an array of snapshot items (each item includes product_id, quantity, price).
+     */
+    protected static function computeCartHash(array $items): string
+    {
+        try {
+            // Build the normalized array like client: [{id, q, p}, ...]
+            $arr = [];
+            foreach ($items as $it) {
+                $arr[] = [
+                    'id' => (int)($it['product_id'] ?? $it['id'] ?? 0),
+                    'q' => (int)($it['quantity'] ?? $it['qty'] ?? 0),
+                    'p' => (float)($it['price'] ?? 0),
+                ];
+            }
+            $s = json_encode($arr, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+            // djb2-like
+            $h = 5381;
+            $len = strlen($s);
+            for ($i = 0; $i < $len; $i++) {
+                $h = ($h * 33) ^ ord($s[$i]);
+                // keep $h within PHP int range (but we'll mask later)
+            }
+
+            // emulate JS >>> 0 by masking to unsigned 32-bit
+            $unsigned = $h & 0xFFFFFFFF;
+            if ($unsigned < 0) {
+                // ensure positive
+                $unsigned = $unsigned + 0x100000000;
+            }
+
+            return 'ch_' . base_convert((string)$unsigned, 10, 36);
+        } catch (\Throwable $e) {
+            Log::warning('computeCartHash failed: ' . $e->getMessage());
+            return 'ch_0';
+        }
     }
 }
