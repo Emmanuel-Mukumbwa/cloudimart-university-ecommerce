@@ -10,8 +10,13 @@ export default function ProductsPage() {
   const [page, setPage] = useState(1);
   const [category, setCategory] = useState<string>('');
   const [categories, setCategories] = useState<{ id: number; name: string; slug?: string }[]>([]);
-  const [q, setQ] = useState('');
 
+  // q is the debounced query used by the data hook (only updates after typing pauses)
+  const [q, setQ] = useState('');
+  // qInput is the immediate value bound to the input (so typing never causes reload)
+  const [qInput, setQInput] = useState('');
+
+  // useProducts will re-run when page, per_page, q, or category change
   const { data, isLoading, isError } = useProducts({ page, per_page: 12, q, category });
 
   // load categories once
@@ -22,11 +27,21 @@ export default function ProductsPage() {
         if (!mounted) return;
         setCategories(res.data.data ?? res.data.categories ?? res.data ?? []);
       })
-      .catch(() => {})
+      .catch(() => {});
     return () => { mounted = false; };
   }, []);
 
-  // reset page when filters/search change
+  // debounce qInput -> q so the hook does not fire on every keystroke
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      // only update q (and therefore trigger data reload) after user pauses typing
+      setQ(qInput.trim());
+    }, 300); // 300ms debounce; adjust if you prefer longer/shorter
+
+    return () => clearTimeout(handle);
+  }, [qInput]);
+
+  // reset page when filters/search change (q is debounced search param)
   useEffect(() => setPage(1), [category, q]);
 
   // Defensive helper: extract pagination meta from varying API shapes
@@ -91,6 +106,19 @@ export default function ProductsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meta.last_page]);
 
+  // handleChange for category -- keep page resets handled by effect above
+  const onCategoryChange = (val: string) => {
+    setCategory(val);
+  };
+
+  // The input is wrapped in a form to prevent Enter from causing a page reload/navigation.
+  // onSubmit prevents default; Enter now behaves like "do nothing" (or you can choose to apply it).
+  const onSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    // apply immediately when user presses Enter (optional). Uncomment line below if you want Enter to submit immediately:
+    // setQ(qInput.trim());
+  };
+
   // Now safe to return loading/error UI (after all hooks declared)
   if (isLoading) return <div className="container py-5 text-center">Loading products...</div>;
   if (isError) return <div className="container py-5 text-danger text-center">Failed loading products</div>;
@@ -109,16 +137,26 @@ export default function ProductsPage() {
       <div className="bg-white rounded shadow-sm p-4 mb-4">
         <div className="row g-3 align-items-center mb-3">
           <div className="col-md-8">
-            <CategoryFilter categories={categories} value={category} onChange={setCategory} />
+            <CategoryFilter categories={categories} value={category} onChange={onCategoryChange} />
           </div>
 
           <div className="col-md-4">
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search products..."
-              className="form-control"
-            />
+            <form onSubmit={onSearchSubmit}>
+              <input
+                value={qInput}
+                onChange={(e) => setQInput(e.target.value)}
+                placeholder="Search products..."
+                className="form-control"
+                // prevent Enter from doing anything surprising — form prevents default
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    // allow escape to clear current input quickly
+                    setQInput('');
+                  }
+                }}
+                aria-label="Search products"
+              />
+            </form>
           </div>
         </div>
 
@@ -135,7 +173,7 @@ export default function ProductsPage() {
               className="btn btn-outline-secondary btn-sm"
             >
               Previous
-            </button> 
+            </button>
 
             <div className="small text-muted">
               Page {meta.current_page} of {meta.last_page} · {meta.total} items
@@ -149,8 +187,8 @@ export default function ProductsPage() {
               Next
             </button>
           </div>
-        )} 
+        )}
       </div>
     </div>
-  ); 
+  );
 }
