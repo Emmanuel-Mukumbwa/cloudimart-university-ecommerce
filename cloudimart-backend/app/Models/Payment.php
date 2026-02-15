@@ -37,6 +37,9 @@ class Payment extends Model
         'status',
         'meta',
         'proof_url',
+        // NEW: cart linkage fields
+        'cart_id',
+        'cart_updated_at',
     ];
 
     /**
@@ -49,6 +52,9 @@ class Payment extends Model
         'amount' => 'decimal:2',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
+        // NEW
+        'cart_updated_at' => 'datetime',
+        'cart_id' => 'integer',
     ];
 
     /**
@@ -99,6 +105,14 @@ class Payment extends Model
     }
 
     /**
+     * Payment belongs to a cart (optional).
+     */
+    public function cart(): BelongsTo
+    {
+        return $this->belongsTo(Cart::class, 'cart_id');
+    }
+
+    /**
      * Booted model events
      */
     protected static function booted()
@@ -120,6 +134,7 @@ class Payment extends Model
         /**
          * Ensure every Payment has meta.cart_hash and meta.cart_snapshot.
          * We only add them if missing — so we won't overwrite anything your controllers/gateway already set.
+         * Also attempt to populate cart_id and cart_updated_at when possible.
          */
         static::creating(function (Payment $payment) {
             try {
@@ -127,12 +142,6 @@ class Payment extends Model
                 $meta = is_array($payment->meta) ? $payment->meta : (json_decode($payment->meta ?? '[]', true) ?: []);
                 $hasCartHash = isset($meta['cart_hash']) && $meta['cart_hash'] !== null && $meta['cart_hash'] !== '';
                 $hasSnapshot = isset($meta['cart_snapshot']) && is_array($meta['cart_snapshot']) && count($meta['cart_snapshot']) > 0;
-
-                // If both present, nothing to do
-                if ($hasCartHash && $hasSnapshot) {
-                    $payment->meta = $meta;
-                    return;
-                }
 
                 // Attempt to build server-side snapshot from user's cart (if user_id present)
                 $snapshot = [];
@@ -147,6 +156,14 @@ class Payment extends Model
                                     'price' => (float)($ci->product->price ?? 0),
                                     'quantity' => (int)($ci->quantity ?? 0),
                                 ];
+                            }
+                            // If controller did not already set cart_id, prefer to attach it here
+                            if (empty($payment->cart_id) && isset($cart->id)) {
+                                $payment->cart_id = $cart->id;
+                            }
+                            // preserve cart's updated_at if available
+                            if (empty($payment->cart_updated_at) && isset($cart->updated_at)) {
+                                $payment->cart_updated_at = $cart->updated_at;
                             }
                         }
                     } catch (\Throwable $e) {
