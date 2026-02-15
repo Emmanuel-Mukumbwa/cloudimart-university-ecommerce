@@ -1,11 +1,11 @@
 // src/app/(store)/cart/page.tsx
-// src/app/(store)/cart/page.tsx
 'use client';
 import React, { useEffect, useState } from 'react';
 import client from '../../../lib/api/client';
 import { useCart } from '../../../context/CartContext';
 import { useRouter } from 'next/navigation';
 import CenteredModal from '../../../components/common/CenteredModal';
+import LoadingSpinner from '../../../components/common/LoadingSpinner';
 
 export default function CartPage() {
   const [items, setItems] = useState<any[]>([]);
@@ -238,8 +238,8 @@ export default function CartPage() {
       <div className="bg-white rounded shadow-sm p-4">
         <h4 className="mb-4">Your Cart</h4>
 
-        {/* Pending payments summary */}
-        {pendingPayments.length > 0 && (
+        {/* Pending payments summary - show only when not loading */}
+        {!loading && pendingPayments.length > 0 && (
           <div className="mb-3">
             <div className="alert alert-info">
               You have <strong>{pendingPayments.length}</strong> pending payment(s).
@@ -283,7 +283,12 @@ export default function CartPage() {
 
         {error && <div className="alert alert-danger">{error}</div>}
 
-        {items.length === 0 ? (
+        {/* Show spinner while loading; otherwise show cart or empty message */}
+        {loading ? (
+          <div className="text-center py-5">
+            <LoadingSpinner />
+          </div>
+        ) : items.length === 0 ? (
           <div className="text-center text-muted py-5">Your cart is empty</div>
         ) : (
           <>
@@ -369,7 +374,11 @@ export default function CartPage() {
               </div>
 
               <div className="d-flex justify-content-end mt-4">
-                <button className="btn btn-primary btn-lg" onClick={() => router.push('/checkout')} disabled={items.length === 0}>
+                <button
+                  className="btn btn-primary btn-lg"
+                  onClick={() => router.push('/checkout')}
+                  disabled={loading || items.length === 0}
+                >
                   Continue to Checkout →
                 </button>
               </div>
