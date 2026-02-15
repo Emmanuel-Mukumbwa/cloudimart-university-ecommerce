@@ -50,11 +50,14 @@ export default function CheckoutPage() {
   // Modal dedupe helper reference
   const lastModalRef = useRef<{ key: string; ts: number } | null>(null);
 
+  // Cleanup refs for timers & polling
+  const autoCloseTimeoutRef = useRef<number | null>(null);
+  const pollingRef = useRef<number | null>(null);
+  const pollingTxRef = useRef<string | null>(null);
+
   // Payment state & polling
   const [paymentTxRef, setPaymentTxRef] = useState<string | null>(null);
   const [paymentStatus, setPaymentStatus] = useState<'idle' | 'pending' | 'success' | 'failed'>('idle');
-  const pollingRef = useRef<number | null>(null);
-  const pollingTxRef = useRef<string | null>(null);
 
   // Payment modal & loading
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -101,8 +104,40 @@ export default function CheckoutPage() {
     }
   };
 
+  // auto-close a modal by key after ms (safe no-op if another modal replaced it)
+  const autoCloseModalByKey = (key: string, ms = 4000) => {
+    // clear any previous timeout
+    if (autoCloseTimeoutRef.current) {
+      window.clearTimeout(autoCloseTimeoutRef.current);
+      autoCloseTimeoutRef.current = null;
+    }
+    autoCloseTimeoutRef.current = window.setTimeout(() => {
+      try {
+        // only close if lastModalRef matches this key (so we don't close newer modals)
+        if (lastModalRef.current && lastModalRef.current.key === key) {
+          lastModalRef.current = null;
+          setModal({ show: false });
+        }
+      } catch {
+        setModal({ show: false });
+      } finally {
+        if (autoCloseTimeoutRef.current) {
+          window.clearTimeout(autoCloseTimeoutRef.current);
+          autoCloseTimeoutRef.current = null;
+        }
+      }
+    }, ms) as unknown as number;
+  };
+
   // small helper to close modal
-  const closeModal = () => setModal({ show: false });
+  const closeModal = () => {
+    lastModalRef.current = null;
+    if (autoCloseTimeoutRef.current) {
+      window.clearTimeout(autoCloseTimeoutRef.current);
+      autoCloseTimeoutRef.current = null;
+    }
+    setModal({ show: false });
+  };
 
   // --- lifecycle: initial load ---
   useEffect(() => {
@@ -134,6 +169,10 @@ export default function CheckoutPage() {
         pollingRef.current = null;
       }
       pollingTxRef.current = null;
+      if (autoCloseTimeoutRef.current) {
+        window.clearTimeout(autoCloseTimeoutRef.current);
+        autoCloseTimeoutRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -458,15 +497,20 @@ export default function CheckoutPage() {
       }
 
       if (insideAny) {
+        const k = `location_verified_${detected?.id ?? lat}_${lng}`;
         showModal(
           'Location verified',
           detected && detected.name
             ? `You are inside: ${detected.name}\nLat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`
             : `Location verified (inside delivery area).\nLat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`,
-          `location_verified_${detected?.id ?? lat}_${lng}`
+          k
         );
+        // auto-close location verified after short time (user won't need to manually close)
+        autoCloseModalByKey(k, 3500);
       } else {
-        showModal('Outside delivery area', `The coordinates you provided are outside our configured delivery zones.\nLat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`, `outside_${lat}_${lng}`);
+        const k = `outside_${lat}_${lng}`;
+        showModal('Outside delivery area', `The coordinates you provided are outside our configured delivery zones.\nLat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`, k);
+        autoCloseModalByKey(k, 3500);
       }
     } catch (err: any) {
       console.error('Validation error', err);
@@ -524,7 +568,9 @@ export default function CheckoutPage() {
       if (selectedLocationId) {
         await useSelectedLocationFallback(true);
       } else {
-        showModal('GPS failed', 'Unable to get GPS coordinates. Please select a fallback location from the dropdown or try again with a device that has GPS.', 'gps_failed');
+        const k = 'gps_failed';
+        showModal('GPS failed', 'Unable to get GPS coordinates. Please select a fallback location from the dropdown or try again with a device that has GPS.', k);
+        autoCloseModalByKey(k, 3500);
       }
     };
 
@@ -548,7 +594,11 @@ export default function CheckoutPage() {
 
     if (!selectedLocationId) {
       setError('Please select a fallback location from the dropdown.');
-      if (!autoFallback) showModal('No location selected', 'Please select a fallback location.', 'no_location_selected');
+      if (!autoFallback) {
+        const k = 'no_location_selected';
+        showModal('No location selected', 'Please select a fallback location.', k);
+        autoCloseModalByKey(k, 3500);
+      }
       return;
     }
 
@@ -565,13 +615,17 @@ export default function CheckoutPage() {
 
     if (!loc) {
       setError('Selected location details are not available. Try another location or contact support.');
-      showModal('Location not available', 'Selected location details are not available.', 'location_not_available');
+      const k = 'location_not_available';
+      showModal('Location not available', 'Selected location details are not available.', k);
+      autoCloseModalByKey(k, 3500);
       return;
     }
 
     if (loc.latitude === undefined || loc.longitude === undefined || loc.latitude === null || loc.longitude === null) {
       setError('Selected location does not have coordinates to use as fallback.');
-      showModal('No coordinates', 'Selected location does not have coordinates to use as fallback.', 'location_no_coords');
+      const k = 'location_no_coords';
+      showModal('No coordinates', 'Selected location does not have coordinates to use as fallback.', k);
+      autoCloseModalByKey(k, 3500);
       return;
     }
 
@@ -587,7 +641,9 @@ export default function CheckoutPage() {
       setError(err?.response?.data?.message ?? 'Fallback validation failed');
       setDetectedArea(null);
       setVerified(false);
-      showModal('Fallback failed', err?.response?.data?.message ?? 'Fallback validation failed', 'fallback_failed');
+      const k = 'fallback_failed';
+      showModal('Fallback failed', err?.response?.data?.message ?? 'Fallback validation failed', k);
+      autoCloseModalByKey(k, 3500);
     } finally {
       setVerifying(false);
       setShowFallbackChoice(false);
@@ -649,7 +705,9 @@ export default function CheckoutPage() {
             ? `Payment confirmed and order created: ${orderId}. You can view it later or place another order.`
             : 'Payment was successful — you can now place your order.';
 
-          showModal('Payment confirmed', body, `payment_confirmed_${txRef}_${orderId ?? ''}`);
+          const k = `payment_confirmed_${txRef}_${orderId ?? ''}`;
+          showModal('Payment confirmed', body, k);
+          autoCloseModalByKey(k, 4500);
 
           // stop here
           return;
@@ -672,7 +730,9 @@ export default function CheckoutPage() {
             console.warn('refresh after failure failed', e);
           }
 
-          showModal('Payment failed', 'Payment failed or was cancelled.', `payment_failed_${txRef}`);
+          const k = `payment_failed_${txRef}`;
+          showModal('Payment failed', 'Payment failed or was cancelled.', k);
+          autoCloseModalByKey(k, 4500);
         } else {
           setPaymentStatus('pending');
         }
@@ -687,7 +747,9 @@ export default function CheckoutPage() {
         }
         pollingTxRef.current = null;
         setPaymentStatus('failed');
-        showModal('Payment timeout', 'Payment not confirmed within expected time. Please contact support.', `payment_timeout_${txRef}`);
+        const k = `payment_timeout_${txRef}`;
+        showModal('Payment timeout', 'Payment not confirmed within expected time. Please contact support.', k);
+        autoCloseModalByKey(k, 4500);
       }
     }, intervalMs);
   };
@@ -787,8 +849,10 @@ export default function CheckoutPage() {
         throw new Error('Payment initiation failed (no checkout URL or tx_ref returned)');
       }
 
-      // show a single "Payment started" modal (deduped by txRef)
-      showModal('Payment started', 'PayChangu checkout started in a new tab. Complete payment there. This page will detect confirmation automatically.', `payment_started_${txRef}`);
+      // show a single "Payment started" modal (deduped by txRef) and auto-close after 4s
+      const startKey = `payment_started_${txRef}`;
+      showModal('Payment started', 'PayChangu checkout started in a new tab. Complete payment there. This page will detect confirmation automatically.', startKey);
+      autoCloseModalByKey(startKey, 4000);
 
       // open checkout in new tab/window
       try {
@@ -818,6 +882,7 @@ export default function CheckoutPage() {
       } catch (_) {}
       if (!(err instanceof Error) || !/Missing mobile|Invalid mpamba|Invalid airtel/.test(String(err.message))) {
         showModal('Payment failed', err?.response?.data?.error ?? err?.message ?? 'Failed to initiate PayChangu payment.', 'payment_failed_initiate');
+        autoCloseModalByKey('payment_failed_initiate', 4500);
       }
       throw err;
     } finally {
@@ -849,7 +914,10 @@ export default function CheckoutPage() {
       setPaymentStatus('pending');
       startPollingPaymentStatus(txRef);
 
-      showModal('Proof uploaded', 'Your proof of payment was uploaded. Payment is pending admin approval.', `proof_uploaded_${txRef}`);
+      const proofKey = `proof_uploaded_${txRef}`;
+      showModal('Proof uploaded', 'Your proof of payment was uploaded. Payment is pending admin approval.', proofKey);
+      autoCloseModalByKey(proofKey, 4500);
+
       setShowPaymentModal(false);
       setPaymentModalContext(null);
 
@@ -891,6 +959,8 @@ export default function CheckoutPage() {
       }
 
       showModal('Upload failed', userMessage, 'upload_failed');
+      autoCloseModalByKey('upload_failed', 4500);
+
       // ensure reservations are recalculated (in case server changed)
       try {
         await fetchUserPayments(cartHash);
@@ -951,7 +1021,9 @@ export default function CheckoutPage() {
         const returnedStatus = res.data.order?.status ?? 'pending_delivery';
         const statusLabel = returnedStatus === 'pending_delivery' ? 'Pending delivery' : returnedStatus;
 
-        showModal('Order placed', `Order placed — Order ID: ${res.data.order_id ?? '(check orders page)'}\nStatus: ${statusLabel}`, `order_placed_${res.data.order_id ?? ''}`);
+        const ordKey = `order_placed_${res.data.order_id ?? ''}`;
+        showModal('Order placed', `Order placed — Order ID: ${res.data.order_id ?? '(check orders page)'}\nStatus: ${statusLabel}`, ordKey);
+        autoCloseModalByKey(ordKey, 4500);
 
         // refresh cart & payments
         const computed = await loadCart();
@@ -961,10 +1033,12 @@ export default function CheckoutPage() {
         await loadAllPendingPayments(null, itemsSnapshot);
       } else {
         showModal('Order failed', res.data?.message ?? 'Failed to place order', 'order_failed_response');
+        autoCloseModalByKey('order_failed_response', 4500);
       }
     } catch (err: any) {
       console.error('Place order error', err);
       showModal('Order failed', err?.response?.data?.message ?? err?.message ?? 'Failed to place order', 'order_failed');
+      autoCloseModalByKey('order_failed', 4500);
     } finally {
       setPlacingOrder(false);
     }
@@ -978,7 +1052,7 @@ export default function CheckoutPage() {
       return;
     }
 
-    setModal({ show: false });
+    closeModal();
   };
 
   const placeOrderDisabled = placingOrder || !(paymentStatus === 'success' && address.trim().length >= 3 && !!paymentTxRef);
@@ -1191,7 +1265,7 @@ export default function CheckoutPage() {
                       ))}
                     </select>
                     <div className="form-text small mt-1">
-                      
+
                     </div>
                   </div>
 
@@ -1325,7 +1399,7 @@ export default function CheckoutPage() {
               </>
             )}
           </>
-        )} 
+        )}
       </div>
     </div>
   );
