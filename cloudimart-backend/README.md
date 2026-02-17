@@ -25,7 +25,7 @@ This folder contains the Laravel backend for the Cloudimart prototype. It expose
 2. From this backend folder run:
 
 ```powershell
-cd c:\Users\aRelic\Downloads\relic\cloudimart-project\cloudimart-backend
+cd cloudimart-project\cloudimart-backend
 composer install
 cp .env.example .env
 # edit .env to set DB credentials, MAIL and SMS provider configs
