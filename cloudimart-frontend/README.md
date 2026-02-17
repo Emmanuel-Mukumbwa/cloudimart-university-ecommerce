@@ -11,7 +11,7 @@ This folder contains the Next.js frontend for the Cloudimart prototype. It provi
 1. From project frontend folder run:
 
 ```powershell
-cd c:\Users\aRelic\Downloads\relic\cloudimart-project\cloudimart-frontend
+cd cloudimart-project\cloudimart-frontend
 npm install
 ```
 
