@@ -227,13 +227,13 @@ export default function AdminOrdersPage() {
                     <div className="d-flex flex-column align-items-end">
                       {o.status !== 'delivered' && (
                         <>
-                          <button className="btn btn-sm btn-success mb-1" onClick={() => confirmChangeStatus(o.id, o.order_id, 'delivered')}>Mark delivered</button>
+                          {/*<button className="btn btn-sm btn-success mb-1" onClick={() => confirmChangeStatus(o.id, o.order_id, 'delivered')}>Mark delivered</button>*/}
 
                           <button className="btn btn-sm btn-outline-primary mb-1" onClick={() => openAssignModal(o)}>
                             Assign to delivery
                           </button>
 
-                          <button className="btn btn-sm btn-danger" onClick={() => confirmChangeStatus(o.id, o.order_id, 'failed')}>Mark failed</button>
+                         {/* <button className="btn btn-sm btn-danger" onClick={() => confirmChangeStatus(o.id, o.order_id, 'failed')}>Mark failed</button>*/}
                         </>
                       )}
                     </div>
