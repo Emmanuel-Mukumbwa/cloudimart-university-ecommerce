@@ -5,10 +5,9 @@ use App\Models\Location;
 
 class LocationService
 {
-    /**
+    /** 
      * Returns true if (lat,lng) is inside any configured delivery area.
      * Supports:
-     *  - polygon_coordinates (JSON array of [lat,lng] pairs) OR
      *  - latitude/longitude + radius_km (circle)
      */
     public function isWithinDeliveryZone(float $lat, float $lng): bool
