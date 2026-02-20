@@ -10,7 +10,7 @@ use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use App\Services\LocationService;
-
+ 
 class AuthController extends Controller
 {
     /**
