@@ -8,7 +8,7 @@ use App\Traits\GeneratesOrderId;
 use Illuminate\Support\Facades\DB;
 use Exception;
 
-class OrderService
+class OrderService 
 {
     use GeneratesOrderId;
 
@@ -39,7 +39,7 @@ class OrderService
                 'total' => $cartData['total'],
                 'delivery_address' => $address ?? '',
                 'delivery_lat' => $deliveryLat,
-                'delivery_lng' => $deliveryLng,
+                'delivery_lng' => $deliveryLng, 
                 'status' => 'pending',
             ]);
 
@@ -50,8 +50,7 @@ class OrderService
                     'quantity' => $item['quantity'],
                     'price' => $item['unit_price'],
                 ]);
-                // optional: decrement product stock
-                // \App\Models\Product::where('id',$item['product_id'])->decrement('stock', $item['quantity']);
+                
             }
 
             // Create a transaction log (mock payment success)
@@ -63,9 +62,7 @@ class OrderService
                 'status' => 'completed'
             ]);
 
-            // Optionally send notification (email/SMS simulation)
-            // $this->notificationService->sendOrderConfirmation($order);
-
+            
             return $order;
         });
     }
