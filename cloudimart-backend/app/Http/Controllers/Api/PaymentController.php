@@ -7,7 +7,7 @@ use App\Models\OrderItem;
 use App\Models\Delivery;
 use App\Models\Cart;
 use App\Models\Notification;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\DB; 
 use Illuminate\Support\Str;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
