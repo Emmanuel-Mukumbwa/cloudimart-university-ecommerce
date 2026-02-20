@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Location;
 use App\Services\LocationService;
-use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Log; 
 
 class LocationController extends Controller
 {
