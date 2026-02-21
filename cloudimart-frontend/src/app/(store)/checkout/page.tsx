@@ -126,7 +126,7 @@ export default function CheckoutPage() {
         }
       } catch {
         setModal({ show: false });
-      } finally {
+      } finally { 
         if (autoCloseTimeoutRef.current) {
           window.clearTimeout(autoCloseTimeoutRef.current);
           autoCloseTimeoutRef.current = null;
@@ -814,7 +814,7 @@ export default function CheckoutPage() {
 
           const k = `payment_confirmed_${txRef}_${orderId ?? ''}`;
           showModal('Payment confirmed', body, k);
-          autoCloseModalByKey(k, 4500);
+          autoCloseModalByKey(k, 20000);
 
           // stop here
           return;
@@ -1143,7 +1143,7 @@ export default function CheckoutPage() {
 
         const ordKey = `order_placed_${res.data.order_id ?? ''}`;
         showModal('Order placed', `Order placed — Order ID: ${res.data.order_id ?? '(check orders page)'}\nStatus: ${statusLabel}`, ordKey);
-        autoCloseModalByKey(ordKey, 4500);
+        autoCloseModalByKey(ordKey, 20000);
 
         // refresh cart & payments
         const computed = await loadCart();
