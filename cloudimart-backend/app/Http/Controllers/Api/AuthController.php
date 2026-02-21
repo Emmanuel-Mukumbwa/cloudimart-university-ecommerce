@@ -3,14 +3,15 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use Illuminate\Http\Request; 
+use Illuminate\Http\Request;
 use App\Models\User;
+use App\Models\Location;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use App\Services\LocationService;
- 
+
 class AuthController extends Controller
 {
     /**
@@ -26,46 +27,100 @@ class AuthController extends Controller
             'location_id'  => 'required|exists:locations,id',
             'latitude'     => 'nullable|numeric',
             'longitude'    => 'nullable|numeric',
+            'postVerificationAction' => 'nullable|string',
         ]);
 
         try {
-            // Determine if the user's provided coordinates are within a valid delivery zone
-            $location_verified = false;
+            $lat = $request->input('latitude', null);
+            $lng = $request->input('longitude', null);
+            $selectedLocationId = (int) $request->input('location_id');
 
-            if (
-                $request->filled('latitude') &&
-                $request->filled('longitude') &&
-                $request->filled('location_id')
-            ) {
-                $locationService = app(LocationService::class);
-
-                // Check if user coordinates are inside any allowed polygon
-                $matches = $locationService->isWithinDeliveryZone(
-                    (float) $request->latitude,
-                    (float) $request->longitude
-                );
-
-                // Optionally refine to match selected location polygon only
-                $location_verified = $matches;
+            // Require coordinates to be present (frontend should provide them)
+            if ($lat === null || $lng === null) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Coordinates (latitude and longitude) are required to register.',
+                ], 422);
             }
 
-            // Use transaction to ensure data integrity
-            $user = DB::transaction(function () use ($request, $location_verified) {
+            // Load and validate selected location
+            $selectedLocation = Location::find($selectedLocationId);
+            if (! $selectedLocation || ! $selectedLocation->is_active || ! $selectedLocation->is_deliverable) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Selected location is not available for delivery registration.',
+                ], 422);
+            }
+
+            // Use LocationService to check whether the coordinates match the selected location.
+            $locationService = app(LocationService::class);
+
+            $matchesSelected = false;
+            $distanceKm = null;
+
+            // 1) If selected location has polygon coordinates, prefer point-in-polygon.
+            $poly = null;
+            if (!empty($selectedLocation->polygon_coordinates)) {
+                // polygon might be stored as JSON string or cast to array — handle both
+                if (is_array($selectedLocation->polygon_coordinates)) {
+                    $poly = $selectedLocation->polygon_coordinates;
+                } else {
+                    $poly = json_decode($selectedLocation->polygon_coordinates, true);
+                }
+
+                if (!empty($poly) && is_array($poly)) {
+                    $matchesSelected = $locationService->pointInPolygon((float)$lat, (float)$lng, $poly);
+                }
+            }
+
+            // 2) Otherwise check radius (if radius + center exists)
+            if (! $matchesSelected) {
+                if (!is_null($selectedLocation->latitude) && !is_null($selectedLocation->longitude) && !is_null($selectedLocation->radius_km)) {
+                    $distanceKm = $locationService->haversineDistance((float)$lat, (float)$lng, (float)$selectedLocation->latitude, (float)$selectedLocation->longitude);
+                    if ($distanceKm <= (float)$selectedLocation->radius_km) {
+                        $matchesSelected = true;
+                    }
+                }
+            }
+
+            // If coordinates don't match the selected location - reject registration
+            if (! $matchesSelected) {
+                $payload = [
+                    'success' => false,
+                    'message' => 'Your coordinates are outside the configured delivery zone for the selected location.',
+                ];
+                if ($distanceKm !== null) {
+                    $payload['distance_km'] = round($distanceKm, 3);
+                    $payload['allowed_radius_km'] = (float) $selectedLocation->radius_km;
+                }
+                return response()->json($payload, 422);
+            }
+
+            // Optional: double-check coordinates fall within at least one active zone (polygon or radius)
+            // (useful if you have other zones that might overlap or additional polygons)
+            $isWithinAny = $locationService->isWithinDeliveryZone((float)$lat, (float)$lng);
+            if (! $isWithinAny) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Your coordinates are not within any supported delivery area.',
+                ], 422);
+            }
+
+            // Create user inside DB transaction and mark as verified
+            $user = DB::transaction(function () use ($request, $lat, $lng) {
                 return User::create([
                     'name'                 => $request->name,
                     'email'                => $request->email,
                     'password'             => Hash::make($request->password),
                     'phone_number'         => $request->phone_number,
                     'location_id'          => $request->location_id,
-                    'latitude'             => $request->latitude,
-                    'longitude'            => $request->longitude,
-                    // set location_verified_at if coordinates matched a delivery zone
-                    'location_verified_at' => $location_verified ? now() : null,
-                    'role'                 => 'user', // ensure default role
+                    'latitude'             => $lat,
+                    'longitude'            => $lng,
+                    'location_verified_at' => now(),
+                    'role'                 => 'user',
                 ]);
             });
 
-            // create token
             $token = $user->createToken('api-token')->plainTextToken;
 
             return response()->json([
@@ -73,10 +128,11 @@ class AuthController extends Controller
                 'message'         => 'User registered successfully',
                 'user'            => $user,
                 'token'           => $token,
-                'access_token'    => $token, // friendly key for frontend compatibility
+                'access_token'    => $token,
                 'token_type'      => 'Bearer',
                 'redirect_url'    => $this->redirectForRole($user->role),
-                'location_status' => $user->location_verified_at ? 'verified' : 'unverified',
+                'location_status' => 'verified',
+                'distance_km'     => $distanceKm !== null ? round($distanceKm, 3) : null,
             ], 201);
         } catch (\Throwable $e) {
             Log::error('User registration failed', [
@@ -104,24 +160,18 @@ class AuthController extends Controller
         $user = User::where('email', $request->email)->first();
 
         if (! $user || ! Hash::check($request->password, $user->password)) {
-            // Return field-level validation messages for both email and password
-            // so the frontend can map the error exactly to the right inputs.
             throw ValidationException::withMessages([
                 'email' => ['The provided credentials are incorrect.'],
                 'password' => ['The provided credentials are incorrect.'],
             ]);
         }
 
-        // check active flag
         if (! $user->is_active) {
             return response()->json([
                 'success' => false,
                 'message' => 'Your account has been deactivated. Contact support to reactivate.',
             ], 403);
         }
-
-        // revoke previous tokens optionally (uncomment if you want only single-session)
-        // $user->tokens()->delete();
 
         $token = $user->createToken('api-token')->plainTextToken;
 
@@ -160,9 +210,9 @@ class AuthController extends Controller
     protected function redirectForRole(string $role): string
     {
         return match ($role) {
-            'admin' => '/admin/dashboard', 
+            'admin' => '/admin/dashboard',
             'delivery' => '/delivery/dashboard',
-            default => '/', // normal user -> home
+            default => '/',
         };
     }
 }
