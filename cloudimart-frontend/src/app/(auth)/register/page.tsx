@@ -1,3 +1,4 @@
+//src/app/register/page.tsx  
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -76,10 +77,7 @@ export default function RegisterPage() {
   };
 
   // --- GPS + Backend Validation Function ---
-  // Returns:
-  // - server response object if validation was performed
-  // - { status: 'no_gps' } when geolocation couldn't be obtained and selected location is NOT Chitipa
-  // - null when server validation failed (network/CORS) — caller decides
+  // Returns an object: { serverRes, lat, lng } or { serverRes: { status: 'no_gps' }, lat?, lng? } or null (network error)
   const confirmLocationWithGPS = async (selectedLocationId?: number) => {
     const url = API ? `${API}/api/locations/validate-public` : '/api/locations/validate-public';
 
@@ -90,15 +88,19 @@ export default function RegisterPage() {
         setVerificationResult(res.data);
         return res.data;
       } catch (err: any) {
+        // If backend returns 422 with details, forward that object (so frontend can interpret)
+        if (err?.response) {
+          // return the response data so onSubmit can inspect e.g., { inside_any_area: false } or errors
+          return err.response.data ?? null;
+        }
         console.error('[register] validate-public error', err?.response ?? err);
-        throw err;
+        return null; // network/CORS error (caller will handle)
       }
     };
 
     setVerifying(true);
     setGpsStatus('Getting GPS coordinates...');
 
-    // try native geolocation, fall back conditionally to Chitipa coords only
     try {
       if (navigator.geolocation) {
         const pos = await new Promise<GeolocationPosition>((res, rej) =>
@@ -111,7 +113,7 @@ export default function RegisterPage() {
 
         const serverRes = await callValidate(lat, lng);
         setGpsStatus('');
-        return serverRes;
+        return { serverRes, lat, lng };
       } else {
         // no geolocation available (older browsers)
         console.warn('[register] navigator.geolocation not available');
@@ -122,10 +124,10 @@ export default function RegisterPage() {
           setGpsStatus('Verifying coordinates (using Chitipa fallback)...');
           const serverRes = await callValidate(FALLBACK_COORDS.lat, FALLBACK_COORDS.lng);
           setGpsStatus('');
-          return serverRes;
+          return { serverRes, lat: FALLBACK_COORDS.lat, lng: FALLBACK_COORDS.lng };
         } else {
           setGpsStatus('');
-          return { status: 'no_gps' };
+          return { serverRes: { status: 'no_gps' }, lat: undefined, lng: undefined };
         }
       }
     } catch (e: any) {
@@ -140,11 +142,11 @@ export default function RegisterPage() {
           setGpsStatus('Verifying coordinates');
           const serverRes = await callValidate(FALLBACK_COORDS.lat, FALLBACK_COORDS.lng);
           setGpsStatus('');
-          return serverRes;
+          return { serverRes, lat: FALLBACK_COORDS.lat, lng: FALLBACK_COORDS.lng };
         } else {
           // explicitly tell caller that no GPS was available for non-Chitipa selection
           setGpsStatus('');
-          return { status: 'no_gps' };
+          return { serverRes: { status: 'no_gps' }, lat: undefined, lng: undefined };
         }
       } catch (err) {
         // If server validation for fallback fails (network/CORS), return null to let caller decide.
@@ -163,9 +165,22 @@ export default function RegisterPage() {
   const onSubmit = async (data: RegisterFormData) => {
     try {
       const selectedId = parseInt(data.location_id);
-      const gpsResult = await confirmLocationWithGPS(selectedId);
+      const result = await confirmLocationWithGPS(selectedId);
+      const gpsResult = result?.serverRes ?? null;
+      const lat = result?.lat;
+      const lng = result?.lng;
 
-      // If geolocation couldn't be obtained for a non-Chitipa location -> show error and stop
+      // If server validation couldn't be performed (network/CORS) -> block and ask user to retry
+      if (gpsResult === null) {
+        setModal({
+          show: true,
+          title: 'Location verification failed',
+          body: 'Could not verify your coordinates due to a network/server error. Please ensure you are online and try again.',
+        });
+        return;
+      }
+
+      // If geolocation couldn't be obtained for a non-Chitipa location -> block registration
       if (gpsResult && gpsResult.status === 'no_gps') {
         const locName = getLocationName(selectedId) || 'the selected location';
         setModal({
@@ -174,7 +189,7 @@ export default function RegisterPage() {
           body: (
             <div>
               <p className="small mb-2">
-                We cannot verify you're inside <strong>{locName}</strong> please select the area you are in.
+                We cannot verify you are inside <strong>{locName}</strong>. Please allow location access or choose a location where you can share GPS.
               </p>
             </div>
           ),
@@ -182,91 +197,53 @@ export default function RegisterPage() {
         return; // DO NOT continue registration
       }
 
-      // If gpsResult is null (server validation failed), allow registration but mark unverified
-      if (gpsResult === null) {
-        // Continue registration but do not claim verified
-        await submitRegistration(data, coords.lat, coords.lng, 'force');
-        return;
+      // If server returned a structured validation (e.g., inside_any_area: false) -> enforce blocking
+      if (typeof gpsResult === 'object') {
+        // explicit "outside any area"
+        if (gpsResult?.inside_any_area === false) {
+          setModal({
+            show: true,
+            title: 'Outside supported area',
+            body: (
+              <div>
+                <p className="small mb-2">Your coordinates are outside the configured delivery zones. Registration is not allowed from this location.</p>
+                <p className="small mb-0">If you believe this is an error, contact support.</p>
+              </div>
+            ),
+          });
+          return;
+        }
+
+        // inside some area but not matching selected -> ask user to update selection (block registration)
+        if (gpsResult?.inside_any_area && !gpsResult?.matches_selected) {
+          setModal({
+            show: true,
+            title: 'Location mismatch',
+            body: (
+              <div>
+                <p className="small mb-2">
+                  Our check detected coordinates inside <strong>{gpsResult?.detected_location?.name ?? 'another area'}</strong>, which does not match your selected location.
+                </p>
+                <p className="small mb-2">Please update your selected location to the detected area, or move to the selected area to register.</p>
+              </div>
+            ),
+          });
+          return;
+        }
       }
 
+      // Only allow registration when matches_selected === true
       if (gpsResult?.matches_selected) {
-        // verified in selected area
-        await submitRegistration(data, coords.lat, coords.lng, 'accept');
+        await submitRegistration(data, lat, lng);
         return;
       }
 
-      if (gpsResult?.inside_any_area && !gpsResult.matches_selected) {
-        // offer user choice via modal (update location / keep / force)
-        setModal({
-          show: true,
-          title: 'Location differs',
-          body: (
-            <div>
-              <p className="small mb-2">
-                Our check detected you're inside another registered area: <strong>{gpsResult?.detected_location?.name ?? 'Other area'}</strong>.
-              </p>
-              <p className="small mb-0">Choose whether to update your selected location or continue with your selection (unverified).</p>
-            </div>
-          ),
-          ok: async () => {
-            // OK = update to detected (update action)
-            setModal((m) => ({ ...m, show: false }));
-            await submitRegistration(data, coords.lat, coords.lng, 'update');
-          },
-        });
-
-        // show a second modal with explicit choices
-        setModal({
-          show: true,
-          title: 'Location detected',
-          body: (
-            <div>
-              <p className="mb-2 small">
-                Your coordinates match <strong>{gpsResult?.detected_location?.name ?? 'another area'}</strong>.
-              </p>
-              <div className="d-flex gap-2 justify-content-end">
-                <button className="btn btn-outline-secondary" onClick={async () => { setModal({ show: false }); await submitRegistration(data, coords.lat, coords.lng, 'force'); }}>
-                  Keep selected (unverified)
-                </button>
-                <button className="btn btn-primary" onClick={async () => { setModal({ show: false }); await submitRegistration(data, coords.lat, coords.lng, 'update'); }}>
-                  Update to detected area
-                </button>
-              </div>
-            </div>
-          ),
-        });
-
-        return;
-      }
-
-      if (gpsResult?.inside_any_area === false) {
-        // outside any area — ask user if they want to proceed unverified
-        setModal({
-          show: true,
-          title: 'Outside supported area',
-          body: (
-            <div>
-              <p className="small mb-2">Your location appears to be outside supported community areas.</p>
-              <div className="d-flex gap-2 justify-content-end">
-                <button className="btn btn-outline-secondary" onClick={() => setModal({ show: false })}>
-                  Cancel
-                </button>
-                <button className="btn btn-primary" onClick={async () => { setModal({ show: false }); await submitRegistration(data, coords.lat, coords.lng, 'force'); }}>
-                  Continue (unverified)
-                </button>
-              </div>
-            </div>
-          ),
-        });
-        return;
-      }
-
-      // fallback
-      if (!gpsResult) {
-        // could not verify
-        setModal({ show: true, title: 'Location verification', body: 'Could not verify your location. You can continue registering but your location will be unverified.' });
-        await submitRegistration(data, coords.lat, coords.lng, 'force');
-      }
+      // fallback: block and show generic message
+      setModal({
+        show: true,
+        title: 'Location verification',
+        body: 'Your location could not be verified – registration cannot proceed from this location.',
+      });
     } catch (e) {
       console.error('onSubmit error', e);
       setModal({ show: true, title: 'Error', body: 'An unexpected error occurred. Please try again.' });
@@ -277,8 +254,7 @@ export default function RegisterPage() {
   const submitRegistration = async (
     data: RegisterFormData,
     lat?: number,
-    lng?: number,
-    action: 'accept' | 'update' | 'force' = 'accept'
+    lng?: number
   ) => {
     setSubmitting(true);
     setGpsStatus('');
@@ -294,7 +270,7 @@ export default function RegisterPage() {
         location_id: data.location_id,
         latitude: lat,
         longitude: lng,
-        postVerificationAction: action,
+        postVerificationAction: 'accept',
       };
 
       const res = await axios.post(url, payload);
@@ -308,7 +284,7 @@ export default function RegisterPage() {
       setModal({
         show: true,
         title: 'Registration successful',
-        body: `Welcome ${res.data?.user?.name ?? `${data.first_name} ${data.last_name}`}! Your account was created.`,
+        body: `Welcome ${res.data?.user?.name ?? `${data.first_name} ${data.last_name}`}! Your account was created and your location is verified.`,
         ok: () => {
           setModal((m) => ({ ...m, show: false }));
           window.location.href = res.data?.redirect_url ?? '/';
@@ -317,16 +293,15 @@ export default function RegisterPage() {
     } catch (err: any) {
       console.error('Registration failed', err?.response ?? err);
 
-      // Map server validation errors (Laravel style: errors: { field: [msg] })
+      // If backend returned 422 with message about coordinates, show modal with that message
       const resp = err?.response?.data ?? null;
       if (resp) {
+        // Map server validation errors (Laravel style: errors: { field: [msg] })
         if (resp.errors && typeof resp.errors === 'object') {
           Object.keys(resp.errors).forEach((field) => {
             const msg = Array.isArray(resp.errors[field]) ? resp.errors[field][0] : String(resp.errors[field]);
-            // If backend returns 'name' errors, map them to both first_name and last_name so users see it.
             try {
               if (field === 'name') {
-                // set both fields so the user sees the message
                 setError('first_name' as any, { type: 'server', message: msg });
                 setError('last_name' as any, { type: 'server', message: msg });
               } else {
@@ -336,16 +311,9 @@ export default function RegisterPage() {
               // ignore invalid field names
             }
           });
-          // show top-level message as modal as well
           setModal({ show: true, title: 'Registration failed', body: Object.values(resp.errors).flat().join(' — ') });
         } else if (resp.message) {
-          // If backend returned a general message and mentions "name", helpfully assign to both fields in the UI
-          if (typeof resp.message === 'string' && resp.message.toLowerCase().includes('name')) {
-            try {
-              setError('first_name' as any, { type: 'server', message: resp.message });
-              setError('last_name' as any, { type: 'server', message: resp.message });
-            } catch { /* ignore */ }
-          }
+          // If message mentions coordinates or zone, show blocking modal
           setModal({ show: true, title: 'Registration failed', body: resp.message });
         } else {
           setModal({ show: true, title: 'Registration failed', body: JSON.stringify(resp).slice(0, 400) });
